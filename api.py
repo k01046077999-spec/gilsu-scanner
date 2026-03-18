@@ -4,15 +4,24 @@ import time
 
 app = Flask(__name__)
 
-CACHE_TTL = 300  # 5분 캐시
+CACHE_TTL = 300
 CACHE = {
     "ts": 0,
     "data": None
 }
 
+print("INITIAL SCAN START")
+try:
+    CACHE["data"] = scan_all()
+    CACHE["ts"] = time.time()
+    print("INITIAL SCAN DONE")
+except Exception as e:
+    print("INITIAL SCAN ERROR:", e)
+
 
 def get_scan_data():
     now = time.time()
+
     if CACHE["data"] is not None and (now - CACHE["ts"] < CACHE_TTL):
         return CACHE["data"]
 
