@@ -1,5 +1,5 @@
 from flask import Flask, request
-from scanner import scan
+from scanner import scan, get_upbit_markets
 
 app = Flask(__name__)
 
@@ -7,10 +7,17 @@ app = Flask(__name__)
 def health():
     return {"ok": True}
 
+@app.route("/debug/markets")
+def debug_markets():
+    markets = get_upbit_markets()
+    return {
+        "count": len(markets),
+        "sample": markets[:10]
+    }
+
 @app.route("/scan/latest")
 def latest():
     mode = request.args.get("mode", "main")
-
     coins = scan()
 
     if mode == "main":
