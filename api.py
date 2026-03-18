@@ -21,31 +21,22 @@ def health():
 
 @app.route("/scan", methods=["GET"])
 def scan():
-    """
-    Query params:
-    - limit: int (default 15, max 50)
-    - timeframe: str (default 1h)
-    - market: str (default spot)
-    """
     try:
-        limit = request.args.get("limit", default=15, type=int)
+        limit = request.args.get("limit", default=10, type=int)
         timeframe = request.args.get("timeframe", default="1h", type=str)
-        market = request.args.get("market", default="spot", type=str)
 
-        limit = max(1, min(limit, 50))
+        if limit < 1:
+            limit = 1
+        if limit > 30:
+            limit = 30
+
         if timeframe not in {"15m", "30m", "1h", "4h", "1d"}:
             return jsonify({
                 "status": "error",
                 "message": "Unsupported timeframe. Use one of: 15m, 30m, 1h, 4h, 1d"
             }), 400
 
-        if market not in {"spot"}:
-            return jsonify({
-                "status": "error",
-                "message": "Currently only 'spot' market is supported"
-            }), 400
-
-        result = run_gilsu_scan(limit=limit, timeframe=timeframe, market=market)
+        result = run_gilsu_scan(limit=limit, timeframe=timeframe)
         return jsonify(result), 200
 
     except Exception as e:
