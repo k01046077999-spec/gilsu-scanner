@@ -10,10 +10,10 @@ EXCHANGE_ID = "binance"
 OHLCV_LIMIT = 250
 MAX_SYMBOLS_TO_SCAN = 80
 
-# 길수매매법 실전 필터(1차 안정화 버전)
-MIN_AVG_NOTIONAL = 2_000_000          # 최근 평균 거래대금 최소치
-MAX_20BAR_RISE_PCT = 25.0             # 최근 20봉 과열 제외
-RESISTANCE_BUFFER_PCT = 3.0           # 최근 고점 너무 근접 제외
+# 길수매매법 1차 안정화 버전
+MIN_AVG_NOTIONAL = 2_000_000
+MAX_20BAR_RISE_PCT = 25.0
+RESISTANCE_BUFFER_PCT = 3.0
 FIB_MIN = 0.618
 FIB_MAX = 0.786
 
@@ -32,7 +32,6 @@ def get_exchange():
 
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -41,9 +40,7 @@ def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    rsi = rsi.bfill()
-
-    return rsi
+    return rsi.bfill()
 
 
 def fetch_ohlcv_df(exchange, symbol: str, timeframe: str, limit: int = OHLCV_LIMIT) -> pd.DataFrame:
@@ -61,7 +58,6 @@ def fetch_ohlcv_df(exchange, symbol: str, timeframe: str, limit: int = OHLCV_LIM
     df = df.dropna().reset_index(drop=True)
     df["rsi"] = compute_rsi(df["close"], 14)
     df["notional"] = df["close"] * df["volume"]
-
     return df
 
 
@@ -136,7 +132,6 @@ def find_bullish_divergence(df: pd.DataFrame) -> Optional[Dict]:
         rsi1 = float(df.iloc[p1]["rsi"])
         rsi2 = float(df.iloc[p2]["rsi"])
 
-        # 일반 강세 다이버전스
         if price2 < price1 and rsi2 > rsi1:
             return {
                 "type": "bullish_divergence",
@@ -309,7 +304,6 @@ def run_gilsu_scan(limit: int = 10, timeframe: str = "1h") -> Dict:
                 "error": str(e)
             })
 
-    # candidate 우선 정렬
     signal_rank = {"candidate": 0, "watch": 1}
     results.sort(key=lambda x: (signal_rank.get(x["signal"], 99), len(x.get("failed", []))))
 
