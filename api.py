@@ -1,68 +1,59 @@
-from flask import Flask, request
-from scanner import scan_all, get_upbit_markets
-import time
+from flask import Flask, jsonify, request
+from scanner import run_gilsu_scan
 
 app = Flask(__name__)
 
-CACHE_TTL = 300
-CACHE = {
-    "ts": 0,
-    "data": None
-}
 
-print("INITIAL SCAN START")
-try:
-    CACHE["data"] = scan_all()
-    CACHE["ts"] = time.time()
-    print("INITIAL SCAN DONE")
-except Exception as e:
-    print("INITIAL SCAN ERROR:", e)
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "status": "ok",
+        "message": "Gilsu scanner API is running"
+    }), 200
 
 
-def get_scan_data():
-    now = time.time()
-
-    if CACHE["data"] is not None and (now - CACHE["ts"] < CACHE_TTL):
-        return CACHE["data"]
-
-    data = scan_all()
-    CACHE["ts"] = now
-    CACHE["data"] = data
-    return data
-
-
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
-    return {"ok": True}
+    return jsonify({
+        "status": "ok"
+    }), 200
 
 
-@app.route("/debug/markets")
-def debug_markets():
-    markets = get_upbit_markets()
-    return {
-        "count": len(markets),
-        "sample": markets[:10]
-    }
+@app.route("/scan", methods=["GET"])
+def scan():
+    """
+    Query params:
+    - limit: int (default 15, max 50)
+    - timeframe: str (default 1h)
+    - market: str (default spot)
+    """
+    try:
+        limit = request.args.get("limit", default=15, type=int)
+        timeframe = request.args.get("timeframe", default="1h", type=str)
+        market = request.args.get("market", default="spot", type=str)
 
+        limit = max(1, min(limit, 50))
+        if timeframe not in {"15m", "30m", "1h", "4h", "1d"}:
+            return jsonify({
+                "status": "error",
+                "message": "Unsupported timeframe. Use one of: 15m, 30m, 1h, 4h, 1d"
+            }), 400
 
-@app.route("/scan/latest")
-def latest():
-    mode = request.args.get("mode", "main")
-    data = get_scan_data()
+        if market not in {"spot"}:
+            return jsonify({
+                "status": "error",
+                "message": "Currently only 'spot' market is supported"
+            }), 400
 
-    if mode not in ["main", "sub"]:
-        mode = "main"
+        result = run_gilsu_scan(limit=limit, timeframe=timeframe, market=market)
+        return jsonify(result), 200
 
-    coins = data.get(mode, [])
-
-    return {
-        "scan_time_kst": data["scan_time_kst"],
-        "mode": mode,
-        "universe_count": data["universe_count"],
-        "count": len(coins),
-        "coins": coins
-    }
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
