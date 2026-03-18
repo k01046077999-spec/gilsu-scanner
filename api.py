@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
-import json, os
+from scanner import scan
 
 app = Flask(__name__)
-DATA_FILE = "result.json"
 
 @app.route("/health")
 def health():
@@ -11,11 +10,16 @@ def health():
 @app.route("/scan/latest")
 def latest():
     mode = request.args.get("mode", "main")
-    if not os.path.exists(DATA_FILE):
-        return {"coins": [], "count": 0}
-    with open(DATA_FILE) as f:
-        data = json.load(f)
-    return data.get(mode, {"coins": [], "count": 0})
+
+    coins = scan()
+
+    if mode == "main":
+        coins = coins[:2]
+
+    return {
+        "count": len(coins),
+        "coins": coins
+    }
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
