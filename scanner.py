@@ -6,7 +6,7 @@ UPBIT_MARKET_URL = "https://api.upbit.com/v1/market/all"
 UPBIT_CANDLE_URL = "https://api.upbit.com/v1/candles/minutes/60"
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker"
 
-TOP_N_BY_TRADE_VALUE = 60
+TOP_N_BY_TRADE_VALUE = 30
 
 
 def chunked(seq, size):
@@ -52,7 +52,7 @@ def get_top_markets_by_trade_value(markets, ticker_map, top_n=TOP_N_BY_TRADE_VAL
     return [x[0] for x in ranked[:top_n]]
 
 
-def get_candles(market, count=80):
+def get_candles(market, count=60):
     resp = requests.get(
         UPBIT_CANDLE_URL,
         params={"market": market, "count": count},
@@ -300,7 +300,7 @@ def scan_all():
 
     for market in markets:
         try:
-            df = get_candles(market, count=80)
+            df = get_candles(market, count=60)
             ticker = ticker_map.get(market, {})
 
             candidate = build_candidate(market, df, ticker)
