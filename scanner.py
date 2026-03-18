@@ -29,6 +29,7 @@ def get_candles(market, count=200):
 
 def rsi(series, period=14):
     delta = series.diff()
+
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -46,31 +47,47 @@ def has_bullish_divergence(df):
     df = df.copy()
     df["rsi"] = rsi(df["close"], 14)
 
-    recent = df.tail(20).reset_index(drop=True)
+    recent = df.tail(24).reset_index(drop=True)
 
-    # 최근 20봉에서 앞쪽/뒤쪽 저점 하나씩 비교
-    first_half = recent.iloc[:10]
-    second_half = recent.iloc[10:]
-
-    if first_half.empty or second_half.empty:
+    if recent["rsi"].isna().all():
         return False
 
-    low1_idx = first_half["close"].idxmin()
-    low2_idx = second_half["close"].idxmin()
+    # 최근 24봉을 3구간으로 나눠 저점 비교
+    part1 = recent.iloc[:8]
+    part2 = recent.iloc[8:16]
+    part3 = recent.iloc[16:24]
+
+    if part1.empty or part2.empty or part3.empty:
+        return False
+
+    low1_idx = part1["close"].idxmin()
+    low2_idx = part2["close"].idxmin()
+    low3_idx = part3["close"].idxmin()
 
     low1_price = recent.loc[low1_idx, "close"]
     low2_price = recent.loc[low2_idx, "close"]
+    low3_price = recent.loc[low3_idx, "close"]
+
     low1_rsi = recent.loc[low1_idx, "rsi"]
     low2_rsi = recent.loc[low2_idx, "rsi"]
+    low3_rsi = recent.loc[low3_idx, "rsi"]
 
-    if pd.isna(low1_rsi) or pd.isna(low2_rsi):
+    if pd.isna(low1_rsi) or pd.isna(low2_rsi) or pd.isna(low3_rsi):
         return False
 
-    price_condition = low2_price <= low1_price * 1.02
-    rsi_condition = low2_rsi > low1_rsi
-    rsi_zone_condition = (low1_rsi < 45) or (low2_rsi < 45)
+    # 가격은 비슷하거나 조금 낮아지는 저점
+    price_condition = (
+        low2_price <= low1_price * 1.05 and
+        low3_price <= low2_price * 1.05
+    )
 
-    return price_condition and rsi_condition and rsi_zone_condition
+    # RSI는 저점이 높아지는 방향
+    rsi_condition = (
+        low2_rsi > low1_rsi or
+        low3_rsi > low2_rsi
+    )
+
+    return price_condition and rsi_condition
 
 
 def scan():
