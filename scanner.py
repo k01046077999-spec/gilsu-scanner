@@ -6,6 +6,8 @@ UPBIT_MARKET_URL = "https://api.upbit.com/v1/market/all"
 UPBIT_CANDLE_URL = "https://api.upbit.com/v1/candles/minutes/60"
 UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker"
 
+TOP_N_BY_TRADE_VALUE = 60
+
 
 def chunked(seq, size):
     for i in range(0, len(seq), size):
@@ -39,7 +41,18 @@ def get_ticker_map(markets):
     return result
 
 
-def get_candles(market, count=120):
+def get_top_markets_by_trade_value(markets, ticker_map, top_n=TOP_N_BY_TRADE_VALUE):
+    ranked = []
+    for market in markets:
+        t = ticker_map.get(market, {})
+        trade_value_24h = float(t.get("acc_trade_price_24h", 0))
+        ranked.append((market, trade_value_24h))
+
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return [x[0] for x in ranked[:top_n]]
+
+
+def get_candles(market, count=80):
     resp = requests.get(
         UPBIT_CANDLE_URL,
         params={"market": market, "count": count},
@@ -76,15 +89,6 @@ def rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 
-def percentile_cut(values, pct):
-    if not values:
-        return 0
-    values = sorted(values)
-    idx = int(len(values) * pct)
-    idx = min(max(idx, 0), len(values) - 1)
-    return values[idx]
-
-
 def get_low_point(segment):
     idx = segment["close"].idxmin()
     return {
@@ -95,7 +99,7 @@ def get_low_point(segment):
 
 
 def analyze_divergence(df):
-    if df.empty or len(df) < 60:
+    if df.empty or len(df) < 48:
         return None
 
     df = df.copy()
@@ -113,7 +117,6 @@ def analyze_divergence(df):
     p2 = get_low_point(part2)
     p3 = get_low_point(part3)
 
-    # 3꼭지 다이버전스 연계 우선
     chain_price_ok = (
         p2["price"] <= p1["price"] * 1.05 and
         p3["price"] <= p2["price"] * 1.05
@@ -123,7 +126,6 @@ def analyze_divergence(df):
         p3["rsi"] > p2["rsi"]
     )
 
-    # 일반 2점 다이버전스 보조
     two_price_ok = p3["price"] <= p1["price"] * 1.05
     two_rsi_ok = p3["rsi"] > p1["rsi"]
 
@@ -190,21 +192,18 @@ def compute_fib_proxy(df):
     }
 
 
-def compute_filters(df, ticker, lower_trade_value_cut):
+def compute_filters(df, ticker):
     last_price = float(df.iloc[-1]["close"])
 
-    # 최근 20봉 상승률
     if len(df) >= 21:
         rise20_pct = ((last_price / float(df.iloc[-21]["close"])) - 1) * 100
     else:
         rise20_pct = 0
 
-    # 최근 60봉 기준 상단 저항까지 거리
     recent60 = df.tail(60)
     high60 = float(recent60["close"].max())
     resistance_gap_pct = ((high60 - last_price) / last_price) * 100 if last_price > 0 else 0
 
-    # 거래량 증가
     recent5_vol = df.tail(5)["volume"].mean() if len(df) >= 5 else 0
     prev20_vol = df.iloc[-25:-5]["volume"].mean() if len(df) >= 25 else 0
     vol_ratio = (recent5_vol / prev20_vol) if prev20_vol and prev20_vol > 0 else 0
@@ -219,11 +218,11 @@ def compute_filters(df, ticker, lower_trade_value_cut):
         "not_overextended": rise20_pct <= 15,
         "not_near_resistance": resistance_gap_pct > 5,
         "volume_ok": vol_ratio >= 1.3,
-        "not_microcap": trade_value_24h >= lower_trade_value_cut
+        "not_microcap": True
     }
 
 
-def build_candidate(market, df, ticker, lower_trade_value_cut):
+def build_candidate(market, df, ticker):
     div = analyze_divergence(df)
     if not div:
         return None
@@ -232,7 +231,7 @@ def build_candidate(market, df, ticker, lower_trade_value_cut):
     if fib["fib_invalid"]:
         return None
 
-    filters = compute_filters(df, ticker, lower_trade_value_cut)
+    filters = compute_filters(df, ticker)
     last_price = float(df.iloc[-1]["close"])
 
     reasons = []
@@ -263,10 +262,8 @@ def build_candidate(market, df, ticker, lower_trade_value_cut):
         score += 5
     if filters["not_near_resistance"]:
         score += 5
-    if filters["not_microcap"]:
-        score += 5
 
-    candidate = {
+    return {
         "market": market,
         "symbol": market.replace("KRW-", ""),
         "score": score,
@@ -291,29 +288,22 @@ def build_candidate(market, df, ticker, lower_trade_value_cut):
         "risk_note": "피보 1 이탈 또는 구조 붕괴 시 무효"
     }
 
-    return candidate
-
 
 def scan_all():
-    markets = get_upbit_markets()
-    ticker_map = get_ticker_map(markets)
+    all_markets = get_upbit_markets()
+    ticker_map = get_ticker_map(all_markets)
 
-    trade_values = []
-    for m in markets:
-        t = ticker_map.get(m, {})
-        trade_values.append(float(t.get("acc_trade_price_24h", 0)))
-
-    lower_trade_value_cut = percentile_cut(trade_values, 0.30)
+    markets = get_top_markets_by_trade_value(all_markets, ticker_map, TOP_N_BY_TRADE_VALUE)
 
     sub_results = []
     main_results = []
 
     for market in markets:
         try:
-            df = get_candles(market, count=120)
+            df = get_candles(market, count=80)
             ticker = ticker_map.get(market, {})
 
-            candidate = build_candidate(market, df, ticker, lower_trade_value_cut)
+            candidate = build_candidate(market, df, ticker)
             if not candidate:
                 continue
 
@@ -324,7 +314,6 @@ def scan_all():
                 f["not_overextended"]
                 and f["not_near_resistance"]
                 and f["volume_ok"]
-                and f["not_microcap"]
             ):
                 main_results.append(candidate)
 
