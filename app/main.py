@@ -1,37 +1,104 @@
-from __future__ import annotations
-
+import asyncio
+from contextlib import suppress
 from fastapi import FastAPI, Query
 
-from app.config import settings
-from app.models import ScanResponse, SignalResponse
-from app.services.scanner import analyze_symbol, scan_symbols
+from app.schemas import HealthResponse, ScanItem, ScanResponse
+from core import config
+from core.engine import PresidentTradingEngine
+from storage.cache import InMemoryCache
 
 app = FastAPI(
-    title="길수매매법 코인 검색기",
-    version="0.1.0",
-    description="1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기 MVP",
+    title="대통령매매법 API",
+    version=config.APP_VERSION,
+    servers=[{"url": config.BASE_URL}],
 )
 
+engine = PresidentTradingEngine()
+cache = InMemoryCache()
+refresh_locks = {"main": asyncio.Lock(), "sub": asyncio.Lock()}
+background_tasks = []
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "gilsu-scanner"}
+def _refreshing_payload(mode: str) -> dict:
+    return {
+        "status": "refreshing",
+        "mode": mode,
+        "count": 0,
+        "candidate_pool": 0,
+        "stage1_checked": 0,
+        "stage2_checked": 0,
+        "scan_seconds": 0.0,
+        "stopped_reason": None,
+        "items": [],
+        "message": config.REFRESHING_MESSAGE,
+        "errors": [],
+        "cache_status": "warming",
+    }
 
+async def _refresh_mode(mode: str) -> None:
+    async with refresh_locks[mode]:
+        result = await asyncio.to_thread(engine.scan, mode, 10 if mode == "main" else 12)
+        result["cache_status"] = "fresh"
+        cache.set(mode, result)
 
-@app.get("/scan/main", response_model=ScanResponse)
-async def scan_main(symbols: str | None = Query(default=None, description="comma separated symbols")):
-    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else settings.default_symbols
-    results = await scan_symbols(symbol_list, mode="main")
-    return ScanResponse(mode="main", count=len(results), results=results)
+async def _loop_refresh(mode: str, interval: int) -> None:
+    await _refresh_mode(mode)
+    while True:
+        await asyncio.sleep(interval)
+        with suppress(Exception):
+            await _refresh_mode(mode)
 
+def _snapshot(mode: str) -> dict:
+    cached = cache.get(mode)
+    if not cached:
+        return _refreshing_payload(mode)
+    payload = dict(cached)
+    payload.setdefault("cache_status", "fresh")
+    return payload
 
-@app.get("/scan/sub", response_model=ScanResponse)
-async def scan_sub(symbols: str | None = Query(default=None, description="comma separated symbols")):
-    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else settings.default_symbols
-    results = await scan_symbols(symbol_list, mode="sub")
-    return ScanResponse(mode="sub", count=len(results), results=results)
+@app.on_event("startup")
+async def startup_event() -> None:
+    background_tasks.clear()
+    background_tasks.append(asyncio.create_task(_loop_refresh("main", config.REFRESH_INTERVAL_MAIN)))
+    background_tasks.append(asyncio.create_task(_loop_refresh("sub", config.REFRESH_INTERVAL_SUB)))
 
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    for task in background_tasks:
+        task.cancel()
+    for task in background_tasks:
+        with suppress(asyncio.CancelledError):
+            await task
 
-@app.get("/scan/symbol/{symbol}", response_model=SignalResponse)
-async def scan_symbol(symbol: str, mode: str = Query(default="main", pattern="^(main|sub)$")):
-    return await analyze_symbol(symbol.upper(), mode=mode)  # type: ignore[arg-type]
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(status="ok", system="president-trading-system", version=config.APP_VERSION)
+
+@app.get("/scan/main", response_model=ScanResponse, response_model_exclude_none=True)
+def scan_main(limit: int = Query(default=10, ge=1, le=30)) -> ScanResponse:
+    return ScanResponse(**engine.scan(mode="main", limit=limit))
+
+@app.get("/scan/sub", response_model=ScanResponse, response_model_exclude_none=True)
+def scan_sub(limit: int = Query(default=12, ge=1, le=40)) -> ScanResponse:
+    return ScanResponse(**engine.scan(mode="sub", limit=limit))
+
+@app.get("/scan/symbol/{symbol}", response_model=ScanItem, response_model_exclude_none=True)
+def scan_symbol(symbol: str, mode: str = Query(default="main", pattern="^(main|sub)$")) -> ScanItem:
+    return ScanItem(**engine.analyze_symbol(symbol.upper(), mode=mode))
+
+@app.get("/gpt/main", response_model=ScanResponse, response_model_exclude_none=True)
+def gpt_main() -> ScanResponse:
+    return ScanResponse(**_snapshot("main"))
+
+@app.get("/gpt/sub", response_model=ScanResponse, response_model_exclude_none=True)
+def gpt_sub() -> ScanResponse:
+    return ScanResponse(**_snapshot("sub"))
+
+@app.post("/refresh/main", response_model=ScanResponse, response_model_exclude_none=True)
+async def refresh_main() -> ScanResponse:
+    await _refresh_mode("main")
+    return ScanResponse(**_snapshot("main"))
+
+@app.post("/refresh/sub", response_model=ScanResponse, response_model_exclude_none=True)
+async def refresh_sub() -> ScanResponse:
+    await _refresh_mode("sub")
+    return ScanResponse(**_snapshot("sub"))
