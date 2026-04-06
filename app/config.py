@@ -27,10 +27,10 @@ class Settings(BaseModel):
     cache_ttl_seconds: int = 120
 
     # Practical trade filters
-    main_min_rr_tp2: float = 1.5
-    sub_min_rr_tp2: float = 1.2
-    main_min_tp1_pct: float = 2.0
-    sub_min_tp1_pct: float = 1.5
+    main_min_rr_tp2: float = 1.2
+    sub_min_rr_tp2: float = 0.9
+    main_min_tp1_pct: float = 1.0
+    sub_min_tp1_pct: float = 1.0
     allow_short_signals: bool = True
 
 

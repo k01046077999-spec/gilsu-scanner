@@ -23,7 +23,7 @@ async def startup_http_client() -> None:
             write=settings.request_timeout_seconds,
             pool=settings.request_timeout_seconds,
         )
-        _client = httpx.AsyncClient(timeout=timeout, headers={"User-Agent": "gilsu-scanner/0.2.0"})
+        _client = httpx.AsyncClient(timeout=timeout, headers={"User-Agent": "gilsu-scanner/0.2.1"})
 
 
 async def shutdown_http_client() -> None:

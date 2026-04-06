@@ -99,20 +99,20 @@ def _build_risk_management(current_price: float, fib: dict, side: str) -> RiskMa
 
 
 def _entry_too_late(current_price: float, fib: dict, side: str) -> bool:
-    fib_618 = fib.get("fib_618")
-    if fib_618 is None:
+    fib_5 = fib.get("fib_5")
+    if fib_5 is None:
         return False
-    fib_618 = float(fib_618)
+    fib_5 = float(fib_5)
     if side == "bullish":
-        return current_price > fib_618
-    return current_price < fib_618
+        return current_price > fib_5
+    return current_price < fib_5
 
 
 def _practical_trade_filter(current_price: float, fib: dict, risk: RiskManagement, side: str, mode: Mode) -> tuple[bool, list[str]]:
     reasons: list[str] = []
 
     if _entry_too_late(current_price, fib, side):
-        reasons.append("진입이 Fib 0.618 바깥으로 늦어져 제외")
+        reasons.append("진입이 Fib 0.5 바깥으로 늦어져 제외")
 
     min_rr_tp2 = settings.main_min_rr_tp2 if mode == "main" else settings.sub_min_rr_tp2
     min_tp1_pct = settings.main_min_tp1_pct if mode == "main" else settings.sub_min_tp1_pct

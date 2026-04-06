@@ -16,7 +16,7 @@ logging.basicConfig(
 
 app = FastAPI(
     title="길수매매법 코인 검색기",
-    version="0.2.0",
+    version="0.2.1",
     description="1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기",
 )
 
