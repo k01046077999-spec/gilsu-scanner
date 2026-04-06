@@ -1,19 +1,18 @@
-# 길수매매법 코인 검색기 patched
 
-이 버전은 기존 MVP를 안정화하고, 피보나치 기반 손절/익절 라인을 같이 내려주도록 보강한 패치본이다.
+# 길수매매법 코인 검색기 - 실전 필터 버전
 
-## 추가된 핵심 변경
-- HTTP 클라이언트 재사용
-- 외부 API retry + backoff
-- 스캔 동시성 제한
-- 스캔 결과 캐시
-- `/ready` 엔드포인트 추가
-- 실패 심볼 / 소요시간 진단 정보 추가
-- 각 결과에 `risk_management` 추가
-  - `stop_loss`: fib 1 기준
-  - `tp1`: 최근 스윙 고점/저점 기준
-  - `tp2`: fib extension 1.272 기준
-  - 각 라인의 퍼센트 및 RR 포함
+이 버전은 기존 MVP/안정화 패치 위에 **실전 필터**를 추가한 버전입니다.
+
+## 추가된 실전 필터
+- 늦은 진입 제외: 현재가가 Fib 0.618 바깥으로 벗어나면 제외
+- RR 필터: 메인 `rr_tp2 >= 1.5`, 서브 `rr_tp2 >= 1.2`
+- 1차 익절 여유 필터: 메인 `tp1 >= 2%`, 서브 `tp1 >= 1.5%`
+- 결과 정렬 기준: 점수 우선이 아니라 `RR(tp2) -> score` 순
+
+## 리스크 관리
+- 손절: Fib 1 이탈
+- 1차 익절: 최근 스윙 고점/저점
+- 2차 익절: Fib extension 1.272
 
 ## 엔드포인트
 - `GET /health`
@@ -21,6 +20,3 @@
 - `GET /scan/main`
 - `GET /scan/sub`
 - `GET /scan/symbol/{symbol}`
-
-## Render
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`

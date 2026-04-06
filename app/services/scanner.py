@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +29,6 @@ class SymbolAnalysisError(Exception):
         super().__init__(f"{symbol}: {reason}")
 
 
-
 def _volume_ok(df) -> bool:
     row = df.iloc[-1]
     if row["vol_ma_20"] == 0 or row["vol_ma_20"] != row["vol_ma_20"]:
@@ -36,11 +36,9 @@ def _volume_ok(df) -> bool:
     return row["vol_ma_5"] > row["vol_ma_20"] * 1.1
 
 
-
 def _overheated(df) -> bool:
     val = float(df["pct_from_20_low"].iloc[-1])
     return val >= 25.0
-
 
 
 def _resistance_room(df, side: str) -> bool:
@@ -54,14 +52,12 @@ def _resistance_room(df, side: str) -> bool:
     return room_pct >= 5.0
 
 
-
 def _safe_pct(entry: float | None, target: float | None, side: str) -> float | None:
-    if entry is None or target is None or entry <= 0:
+    if entry is None or target is None or entry <= 0 or target <= 0:
         return None
     if side == "bullish":
         return round(((target / entry) - 1.0) * 100, 2)
     return round(((entry / target) - 1.0) * 100, 2)
-
 
 
 def _safe_rr(entry: float | None, stop: float | None, target: float | None, side: str) -> float | None:
@@ -76,7 +72,6 @@ def _safe_rr(entry: float | None, stop: float | None, target: float | None, side
     if risk <= 0:
         return None
     return round(reward / risk, 2)
-
 
 
 def _build_risk_management(current_price: float, fib: dict, side: str) -> RiskManagement:
@@ -101,6 +96,42 @@ def _build_risk_management(current_price: float, fib: dict, side: str) -> RiskMa
         rr_tp2=_safe_rr(current_price, stop_loss, tp2, side),
         invalidation_rule="fib_1_break",
     )
+
+
+def _entry_too_late(current_price: float, fib: dict, side: str) -> bool:
+    fib_618 = fib.get("fib_618")
+    if fib_618 is None:
+        return False
+    fib_618 = float(fib_618)
+    if side == "bullish":
+        return current_price > fib_618
+    return current_price < fib_618
+
+
+def _practical_trade_filter(current_price: float, fib: dict, risk: RiskManagement, side: str, mode: Mode) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+
+    if _entry_too_late(current_price, fib, side):
+        reasons.append("진입이 Fib 0.618 바깥으로 늦어져 제외")
+
+    min_rr_tp2 = settings.main_min_rr_tp2 if mode == "main" else settings.sub_min_rr_tp2
+    min_tp1_pct = settings.main_min_tp1_pct if mode == "main" else settings.sub_min_tp1_pct
+
+    if risk.rr_tp2 is None or risk.rr_tp2 < min_rr_tp2:
+        reasons.append(f"RR 부족(tp2<{min_rr_tp2})")
+
+    tp1_pct_abs = abs(risk.tp1_pct) if risk.tp1_pct is not None else None
+    if tp1_pct_abs is None or tp1_pct_abs < min_tp1_pct:
+        reasons.append(f"1차 익절 여유 부족(tp1<{min_tp1_pct}%)")
+
+    stop_pct_abs = abs(risk.stop_loss_pct) if risk.stop_loss_pct is not None else None
+    if stop_pct_abs is None or stop_pct_abs <= 0:
+        reasons.append("손절 구조 계산 불가")
+
+    if side == "bearish" and not settings.allow_short_signals:
+        reasons.append("숏 신호 비활성화")
+
+    return len(reasons) == 0, reasons
 
 
 async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
@@ -216,6 +247,10 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
 
         entry_zone = [round(x, 6) for x in fib.get("entry_zone", [])] if fib.get("entry_zone") else None
         risk = _build_risk_management(current_price, fib, chosen_side)
+        practical_ok, practical_fail_reasons = _practical_trade_filter(current_price, fib, risk, chosen_side, mode)
+        if grade != "reject" and not practical_ok:
+            grade = "reject"
+            reasons = reasons + practical_fail_reasons
 
         metrics = {
             "bull_score": bull_score,
@@ -226,6 +261,8 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
             if float(df_1h["vol_ma_20"].iloc[-1] or 0) != 0
             else None,
             "pct_from_20_low": round(float(df_1h["pct_from_20_low"].iloc[-1]), 2),
+            "practical_filter_passed": practical_ok,
+            "practical_filter_reasons": practical_fail_reasons,
             "fib": {
                 "0.382": round(float(fib.get("fib_382", 0)), 6) if fib.get("fib_382") else None,
                 "0.5": round(float(fib.get("fib_5", 0)), 6) if fib.get("fib_5") else None,
@@ -293,7 +330,7 @@ async def scan_symbols(symbols: list[str], mode: Mode = "main") -> tuple[list[Si
         elif mode == "sub" and result.grade == "sub":
             clean.append(result)
 
-    clean.sort(key=lambda x: x.score, reverse=True)
+    clean.sort(key=lambda x: (x.risk_management.rr_tp2 or 0, x.score), reverse=True)
     duration_ms = int((time.perf_counter() - start) * 1000)
     diagnostics = ScanDiagnostics(
         requested_count=len(requested_symbols),
