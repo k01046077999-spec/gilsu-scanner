@@ -75,3 +75,7 @@ curl 'http://127.0.0.1:8000/scan/symbol/BTCUSDT?mode=main'
 - 메인/서브 자동 추천 `top_picks` 제공
 - 손절/익절 자동 계산(Fib 1, 최근 스윙, Fib 1.272)
 - 실전 필터(늦은 진입, RR, TP1 여유) 반영
+
+
+## 추가 엔드포인트
+- `GET /scan/sub/top` : 서브 후보 중 TOP 추천만 간단 조회

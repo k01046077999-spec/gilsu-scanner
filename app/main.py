@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Query
 
 from app.config import settings
-from app.models import ScanResponse, SignalResponse
+from app.models import ScanResponse, SignalResponse, TopPicksResponse
 from app.services.binance_client import close_client, get_client
 from app.services.scanner import analyze_symbol, scan_symbols
 
@@ -66,6 +66,34 @@ async def scan_sub(symbols: str | None = Query(default=None, description="comma 
         symbol_list = settings.default_symbols
     results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
     return ScanResponse(mode="sub", count=len(results), results=results, top_picks=top_picks, diagnostics=diagnostics)
+
+
+
+
+@app.get("/scan/sub/top", response_model=TopPicksResponse)
+async def scan_sub_top(symbols: str | None = Query(default=None, description="comma separated symbols")):
+    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
+    if symbol_list is not None and not symbol_list:
+        symbol_list = settings.default_symbols
+    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
+    compact_results = [
+        {
+            "symbol": p.symbol,
+            "side": p.side,
+            "score": p.score,
+            "rank_score": p.rank_score,
+            "rr_tp2": p.rr_tp2,
+            "tp2_pct": p.tp2_pct,
+            "volume_ratio": p.volume_ratio,
+            "current_price": p.current_price,
+            "stop_loss": p.stop_loss,
+            "tp1": p.tp1,
+            "tp2": p.tp2,
+            "reason": p.reason,
+        }
+        for p in top_picks
+    ]
+    return TopPicksResponse(mode="sub", count=len(compact_results), top_picks=top_picks, diagnostics=diagnostics)
 
 
 @app.get("/scan/symbol/{symbol}", response_model=SignalResponse)

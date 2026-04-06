@@ -45,3 +45,10 @@ class ScanResponse(BaseModel):
     results: list[SignalResponse]
     top_picks: list[TopPick] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class TopPicksResponse(BaseModel):
+    mode: Mode
+    count: int
+    top_picks: list[TopPick] = Field(default_factory=list)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
