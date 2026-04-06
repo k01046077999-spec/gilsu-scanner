@@ -1,23 +1,10 @@
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
 Mode = Literal["main", "sub"]
 Side = Literal["bullish", "bearish"]
 Grade = Literal["main", "sub", "reject"]
-
-
-class RiskManagement(BaseModel):
-    entry_reference: float | None = None
-    stop_loss: float | None = None
-    stop_loss_pct: float | None = None
-    tp1: float | None = None
-    tp1_pct: float | None = None
-    tp2: float | None = None
-    tp2_pct: float | None = None
-    rr_tp1: float | None = None
-    rr_tp2: float | None = None
-    invalidation_rule: str | None = None
 
 
 class SignalResponse(BaseModel):
@@ -33,23 +20,11 @@ class SignalResponse(BaseModel):
     tp2: float | None = None
     current_price: float | None = None
     reasons: list[str] = Field(default_factory=list)
-    metrics: dict = Field(default_factory=dict)
-    risk_management: RiskManagement | None = None
-
-
-class ScanDiagnostics(BaseModel):
-    requested_count: int
-    scanned_count: int
-    success_count: int
-    failed_count: int
-    filtered_count: int
-    failed_symbols: list[str] = Field(default_factory=list)
-    duration_ms: int
-    cache_hit: bool = False
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScanResponse(BaseModel):
     mode: Mode
     count: int
     results: list[SignalResponse]
-    diagnostics: ScanDiagnostics
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
