@@ -9,8 +9,8 @@ from app.services.scanner import analyze_symbol, scan_symbols
 
 app = FastAPI(
     title="길수매매법 코인 검색기",
-    version="0.3.0",
-    description="1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기 실전 스캔 버전",
+    version="0.4.0",
+    description="1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기 끝판왕 버전",
 )
 
 
@@ -24,6 +24,15 @@ async def shutdown_event():
     await close_client()
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "gilsu-scanner",
+        "version": "0.4.0",
+        "endpoints": ["/health", "/ready", "/scan/main", "/scan/sub", "/scan/symbol/{symbol}"],
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "gilsu-scanner"}
@@ -32,7 +41,13 @@ async def health():
 @app.get("/ready")
 async def ready():
     await get_client()
-    return {"status": "ready", "service": "gilsu-scanner"}
+    return {
+        "status": "ready",
+        "service": "gilsu-scanner",
+        "universe_size": settings.universe_size,
+        "prefilter_size": settings.prefilter_size,
+        "scan_concurrency": settings.scan_concurrency,
+    }
 
 
 @app.get("/scan/main", response_model=ScanResponse)
@@ -40,8 +55,8 @@ async def scan_main(symbols: str | None = Query(default=None, description="comma
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     if symbol_list is not None and not symbol_list:
         symbol_list = settings.default_symbols
-    results, diagnostics = await scan_symbols(symbol_list, mode="main")
-    return ScanResponse(mode="main", count=len(results), results=results, diagnostics=diagnostics)
+    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="main")
+    return ScanResponse(mode="main", count=len(results), results=results, top_picks=top_picks, diagnostics=diagnostics)
 
 
 @app.get("/scan/sub", response_model=ScanResponse)
@@ -49,8 +64,8 @@ async def scan_sub(symbols: str | None = Query(default=None, description="comma 
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     if symbol_list is not None and not symbol_list:
         symbol_list = settings.default_symbols
-    results, diagnostics = await scan_symbols(symbol_list, mode="sub")
-    return ScanResponse(mode="sub", count=len(results), results=results, diagnostics=diagnostics)
+    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
+    return ScanResponse(mode="sub", count=len(results), results=results, top_picks=top_picks, diagnostics=diagnostics)
 
 
 @app.get("/scan/symbol/{symbol}", response_model=SignalResponse)

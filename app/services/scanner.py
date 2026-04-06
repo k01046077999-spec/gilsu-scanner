@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Literal
 
 from app.config import settings
-from app.models import SignalResponse
+from app.models import SignalResponse, TopPick
 from app.services.binance_client import fetch_klines, fetch_top_symbols
 from app.services.divergence import (
     detect_bearish_divergence_chain,
@@ -29,11 +29,9 @@ def _volume_ok(df) -> bool:
     return row["vol_ma_5"] > row["vol_ma_20"] * 1.05
 
 
-
 def _overheated(df) -> bool:
     val = float(df["pct_from_20_low"].iloc[-1])
     return val >= 28.0
-
 
 
 def _resistance_room(df, side: str, min_pct: float = 3.0) -> bool:
@@ -45,7 +43,6 @@ def _resistance_room(df, side: str, min_pct: float = 3.0) -> bool:
     recent_low = float(df["low"].tail(40).min())
     room_pct = (current / recent_low - 1.0) * 100
     return room_pct >= min_pct
-
 
 
 def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_1h):
@@ -62,6 +59,9 @@ def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_
         risk = current_price - stop_loss
         reward_tp1 = tp1 - current_price
         reward_tp2 = tp2 - current_price
+        stop_loss_pct = ((stop_loss / current_price) - 1.0) * 100
+        tp1_pct = ((tp1 / current_price) - 1.0) * 100
+        tp2_pct = ((tp2 / current_price) - 1.0) * 100
     else:
         stop_loss = float(fib_1)
         tp1 = recent_low
@@ -69,10 +69,10 @@ def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_
         risk = stop_loss - current_price
         reward_tp1 = current_price - tp1
         reward_tp2 = current_price - tp2
+        stop_loss_pct = ((current_price / stop_loss) - 1.0) * 100
+        tp1_pct = ((current_price / tp1) - 1.0) * 100
+        tp2_pct = ((current_price / tp2) - 1.0) * 100
 
-    stop_loss_pct = ((stop_loss / current_price) - 1.0) * 100 if chosen_side == "bullish" else ((current_price / stop_loss) - 1.0) * 100
-    tp1_pct = ((tp1 / current_price) - 1.0) * 100 if chosen_side == "bullish" else ((current_price / tp1) - 1.0) * 100
-    tp2_pct = ((tp2 / current_price) - 1.0) * 100 if chosen_side == "bullish" else ((current_price / tp2) - 1.0) * 100
     rr_tp1 = reward_tp1 / risk if risk > 0 else 0.0
     rr_tp2 = reward_tp2 / risk if risk > 0 else 0.0
 
@@ -89,7 +89,6 @@ def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_
         "invalidation_rule": "fib_1_break",
         "fib_entry_reference": round(float(fib_0_5 or current_price), 6),
     }
-
 
 
 def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, list[str]]:
@@ -118,7 +117,6 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
     return len(reasons) == 0, reasons
 
 
-
 def _prefilter_score(df_1h, mode: Mode) -> float:
     score = 0.0
     lows = latest_swing_lows(df_1h, 4)
@@ -144,6 +142,87 @@ def _prefilter_score(df_1h, mode: Mode) -> float:
     if not _overheated(df_1h):
         score += 5
     return score
+
+
+def _build_top_picks(results: list[SignalResponse], mode: Mode) -> list[TopPick]:
+    if not results:
+        return []
+
+    def rank_components(signal: SignalResponse):
+        metrics = signal.metrics or {}
+        risk = metrics.get("risk_management", {}) or {}
+        rr = float(risk.get("rr_tp2") or 0.0)
+        volume_ratio = float(metrics.get("volume_ratio") or 0.0)
+        score = float(signal.score or 0.0)
+        tp2_pct = float(risk.get("tp2_pct") or 0.0)
+        rsi = float(metrics.get("rsi_1h") or 50.0)
+
+        # Conservative but practical. RR is king, then liquidity, then structure score.
+        rsi_bonus = 0.0
+        if signal.side == "bullish" and 28 <= rsi <= 45:
+            rsi_bonus = 3.0
+        elif signal.side == "bearish" and 55 <= rsi <= 72:
+            rsi_bonus = 3.0
+
+        rank_score = (rr * 50.0) + (volume_ratio * 12.0) + (score * 0.35) + min(tp2_pct, 25.0) + rsi_bonus
+        return rank_score, rr, volume_ratio, tp2_pct
+
+    eligible = []
+    for signal in results:
+        metrics = signal.metrics or {}
+        if not metrics.get("practical_filter_passed", False):
+            continue
+        risk = metrics.get("risk_management", {}) or {}
+        rr = float(risk.get("rr_tp2") or 0.0)
+        tp2_pct = float(risk.get("tp2_pct") or 0.0)
+        min_rr = 1.2 if mode == "main" else 0.9
+        if rr < min_rr or tp2_pct < 5.0:
+            continue
+        rank_score, rr, volume_ratio, tp2_pct = rank_components(signal)
+        eligible.append((signal, rank_score, rr, volume_ratio, tp2_pct))
+
+    eligible.sort(key=lambda x: x[1], reverse=True)
+    picks: list[TopPick] = []
+
+    for signal, rank_score, rr, volume_ratio, tp2_pct in eligible[: settings.top_pick_count]:
+        metrics = signal.metrics or {}
+        risk = metrics.get("risk_management", {}) or {}
+        reason_parts = []
+        if rr >= 3:
+            reason_parts.append("RR 우수")
+        elif rr >= 1.5:
+            reason_parts.append("RR 양호")
+        else:
+            reason_parts.append("RR 기준 통과")
+        if volume_ratio >= 1.5:
+            reason_parts.append("거래량 강함")
+        elif volume_ratio >= 1.0:
+            reason_parts.append("거래량 무난")
+        if signal.score >= 55:
+            reason_parts.append("구조 안정")
+        if tp2_pct >= 12:
+            reason_parts.append("상단 여유 큼")
+        elif tp2_pct >= 7:
+            reason_parts.append("목표 여유 확보")
+
+        picks.append(
+            TopPick(
+                symbol=signal.symbol,
+                side=signal.side,
+                grade=signal.grade,
+                score=round(float(signal.score), 2),
+                rank_score=round(rank_score, 2),
+                rr_tp2=round(rr, 2),
+                tp2_pct=round(tp2_pct, 2),
+                volume_ratio=round(volume_ratio, 2),
+                current_price=signal.current_price,
+                stop_loss=signal.stop_loss,
+                tp1=signal.tp1,
+                tp2=signal.tp2,
+                reason=" + ".join(reason_parts),
+            )
+        )
+    return picks
 
 
 async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
@@ -245,7 +324,7 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
     reasons = bull_reasons if chosen_side == "bullish" else bear_reasons
     fib = bull_fib if chosen_side == "bullish" else bear_fib
 
-    grade = "main" if mode == "main" and score >= 62 else "sub" if mode == "sub" and score >= 42 else "reject"
+    grade = "main" if mode == "main" and score >= settings.main_threshold else "sub" if mode == "sub" and score >= settings.sub_threshold else "reject"
     entry_zone = [round(x, 6) for x in fib.get("entry_zone", [])] if fib.get("entry_zone") else None
     risk_management = _calc_risk_management(current_price, fib, chosen_side, df_1h)
 
@@ -304,7 +383,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
                 df_1h = find_swings(enrich_indicators(tf_1h, settings.rsi_period), settings.swing_window)
                 score = _prefilter_score(df_1h, mode)
                 return symbol, score
-            except Exception:  # noqa: BLE001
+            except Exception:
                 failures.append(symbol)
                 return symbol, -1.0
 
@@ -319,7 +398,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
     }
 
 
-async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict]:
+async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
     diagnostics: dict = {"mode": mode}
 
@@ -341,7 +420,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         async with sem:
             try:
                 return await analyze_symbol(symbol, mode=mode)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 failures.append(symbol)
                 return None
 
@@ -353,6 +432,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
     ]
     filtered.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
 
+    top_picks = _build_top_picks(filtered, mode)
     diagnostics.update({
         "scanned_count": len(candidates),
         "success_count": len(clean),
@@ -360,5 +440,6 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         "filtered_count": len(clean) - len(filtered),
         "failed_symbols": failures[:20],
         "duration_ms": int((perf_counter() - start) * 1000),
+        "top_pick_count": len(top_picks),
     })
-    return filtered, diagnostics
+    return filtered, diagnostics, top_picks

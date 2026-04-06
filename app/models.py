@@ -23,8 +23,25 @@ class SignalResponse(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
+class TopPick(BaseModel):
+    symbol: str
+    side: Side | None = None
+    grade: Grade | None = None
+    score: float
+    rank_score: float
+    rr_tp2: float | None = None
+    tp2_pct: float | None = None
+    volume_ratio: float | None = None
+    current_price: float | None = None
+    stop_loss: float | None = None
+    tp1: float | None = None
+    tp2: float | None = None
+    reason: str
+
+
 class ScanResponse(BaseModel):
     mode: Mode
     count: int
     results: list[SignalResponse]
+    top_picks: list[TopPick] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
