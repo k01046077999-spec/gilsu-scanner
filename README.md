@@ -1,30 +1,26 @@
-# 길수매매법 코인 검색기 MVP - 안정화 패치본
+# 길수매매법 코인 검색기 patched
 
-이 버전은 기존 MVP의 API 연동 불안정 문제를 줄이기 위한 안정화 버전이다.
+이 버전은 기존 MVP를 안정화하고, 피보나치 기반 손절/익절 라인을 같이 내려주도록 보강한 패치본이다.
 
-## 주요 개선점
-- `httpx.AsyncClient` 재사용 구조로 변경
-- Binance 호출 retry / backoff 추가
-- 스캔 동시성 제한 추가
-- `/scan/main`, `/scan/sub` 결과 캐시 추가
-- `failed_symbols`, `duration_ms` 등 진단 정보 응답 추가
+## 추가된 핵심 변경
+- HTTP 클라이언트 재사용
+- 외부 API retry + backoff
+- 스캔 동시성 제한
+- 스캔 결과 캐시
 - `/ready` 엔드포인트 추가
-- 단일 심볼 실패와 전체 스캔 실패를 분리
-- 기본 스캔 limit 및 동시 처리량 축소
+- 실패 심볼 / 소요시간 진단 정보 추가
+- 각 결과에 `risk_management` 추가
+  - `stop_loss`: fib 1 기준
+  - `tp1`: 최근 스윙 고점/저점 기준
+  - `tp2`: fib extension 1.272 기준
+  - 각 라인의 퍼센트 및 RR 포함
 
 ## 엔드포인트
-- `GET /health` : 헬스체크
-- `GET /ready` : 준비 상태 및 주요 설정값 확인
-- `GET /scan/main` : 메인 기준 추천 검색
-- `GET /scan/sub` : 서브 기준 추천 검색
-- `GET /scan/symbol/{symbol}` : 특정 심볼 상세 판정
+- `GET /health`
+- `GET /ready`
+- `GET /scan/main`
+- `GET /scan/sub`
+- `GET /scan/symbol/{symbol}`
 
-## Render 권장
-- Free 플랜은 cold start 영향이 크다.
-- 실사용이면 유료 플랜 전환이 더 낫다.
-- 그래도 코드 구조를 먼저 고치는 게 우선이다.
-
-## Start command
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
-```
+## Render
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`

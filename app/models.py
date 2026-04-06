@@ -7,6 +7,19 @@ Side = Literal["bullish", "bearish"]
 Grade = Literal["main", "sub", "reject"]
 
 
+class RiskManagement(BaseModel):
+    entry_reference: float | None = None
+    stop_loss: float | None = None
+    stop_loss_pct: float | None = None
+    tp1: float | None = None
+    tp1_pct: float | None = None
+    tp2: float | None = None
+    tp2_pct: float | None = None
+    rr_tp1: float | None = None
+    rr_tp2: float | None = None
+    invalidation_rule: str | None = None
+
+
 class SignalResponse(BaseModel):
     symbol: str
     timeframe: str
@@ -21,6 +34,7 @@ class SignalResponse(BaseModel):
     current_price: float | None = None
     reasons: list[str] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
+    risk_management: RiskManagement | None = None
 
 
 class ScanDiagnostics(BaseModel):
@@ -38,4 +52,4 @@ class ScanResponse(BaseModel):
     mode: Mode
     count: int
     results: list[SignalResponse]
-    diagnostics: ScanDiagnostics | None = None
+    diagnostics: ScanDiagnostics
