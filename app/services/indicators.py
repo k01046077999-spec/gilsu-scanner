@@ -14,7 +14,7 @@ def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(method="bfill")
+    return rsi.bfill().fillna(50.0)
 
 
 def enrich_indicators(df: pd.DataFrame, rsi_period: int = 14) -> pd.DataFrame:
@@ -24,4 +24,4 @@ def enrich_indicators(df: pd.DataFrame, rsi_period: int = 14) -> pd.DataFrame:
     out["vol_ma_20"] = out["volume"].rolling(20).mean()
     out["pct_from_20_low"] = (out["close"] / out["low"].rolling(20).min() - 1.0) * 100
     out["ret_12"] = out["close"].pct_change(12) * 100
-    return out
+    return out.replace([np.inf, -np.inf], np.nan).bfill().ffill()

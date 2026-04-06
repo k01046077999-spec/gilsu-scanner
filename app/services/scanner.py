@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+from dataclasses import dataclass
 from typing import Literal
 
 from app.config import settings
-from app.models import SignalResponse
+from app.models import ScanDiagnostics, ScanResponse, SignalResponse
 from app.services.binance_client import fetch_klines
 from app.services.divergence import (
     detect_bearish_divergence_chain,
@@ -15,13 +18,24 @@ from app.services.indicators import enrich_indicators
 from app.services.swings import find_swings, latest_swing_highs, latest_swing_lows
 
 Mode = Literal["main", "sub"]
+logger = logging.getLogger(__name__)
+_scan_semaphore = asyncio.Semaphore(settings.scan_concurrency)
+_cache: dict[str, tuple[float, ScanResponse]] = {}
+
+
+@dataclass
+class SymbolScanResult:
+    symbol: str
+    signal: SignalResponse | None = None
+    error: str | None = None
 
 
 def _volume_ok(df) -> bool:
     row = df.iloc[-1]
-    if row["vol_ma_20"] == 0 or row["vol_ma_20"] != row["vol_ma_20"]:
+    vol_ma_20 = float(row["vol_ma_20"])
+    if vol_ma_20 == 0 or vol_ma_20 != vol_ma_20:
         return False
-    return row["vol_ma_5"] > row["vol_ma_20"] * 1.1
+    return float(row["vol_ma_5"]) > vol_ma_20 * 1.1
 
 
 
@@ -43,11 +57,12 @@ def _resistance_room(df, side: str) -> bool:
 
 
 async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
-    tf_1h, tf_30m, tf_4h = await asyncio.gather(
-        fetch_klines(symbol, "1h", settings.default_limit),
-        fetch_klines(symbol, "30m", settings.default_limit),
-        fetch_klines(symbol, "4h", settings.default_limit),
-    )
+    async with _scan_semaphore:
+        tf_1h, tf_30m, tf_4h = await asyncio.gather(
+            fetch_klines(symbol, "1h", settings.default_limit),
+            fetch_klines(symbol, "30m", settings.default_limit),
+            fetch_klines(symbol, "4h", settings.default_limit),
+        )
 
     df_1h = find_swings(enrich_indicators(tf_1h, settings.rsi_period), settings.swing_window)
     df_30m = find_swings(enrich_indicators(tf_30m, settings.rsi_period), settings.swing_window)
@@ -159,14 +174,13 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
         tp1 = round(current_price * 0.75, 6)
         tp2 = round(current_price * 0.50, 6)
 
+    vol_ma_20 = float(df_1h["vol_ma_20"].iloc[-1])
     metrics = {
         "bull_score": bull_score,
         "bear_score": bear_score,
         "current_price": current_price,
         "rsi_1h": round(float(df_1h["rsi"].iloc[-1]), 2),
-        "volume_ratio": round(float(df_1h["vol_ma_5"].iloc[-1] / df_1h["vol_ma_20"].iloc[-1]), 2)
-        if float(df_1h["vol_ma_20"].iloc[-1] or 0) != 0
-        else None,
+        "volume_ratio": round(float(df_1h["vol_ma_5"].iloc[-1] / vol_ma_20), 2) if vol_ma_20 else None,
         "pct_from_20_low": round(float(df_1h["pct_from_20_low"].iloc[-1]), 2),
         "fib": {
             "0.618": round(float(fib.get("fib_618", 0)), 6) if fib.get("fib_618") else None,
@@ -192,16 +206,74 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
     )
 
 
-async def scan_symbols(symbols: list[str], mode: Mode = "main") -> list[SignalResponse]:
-    tasks = [analyze_symbol(sym, mode=mode) for sym in symbols[: settings.max_symbols_per_scan]]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+async def _safe_analyze_symbol(symbol: str, mode: Mode) -> SymbolScanResult:
+    try:
+        signal = await analyze_symbol(symbol, mode=mode)
+        return SymbolScanResult(symbol=symbol, signal=signal)
+    except Exception as exc:
+        logger.exception("symbol scan failed symbol=%s mode=%s error=%s", symbol, mode, repr(exc))
+        return SymbolScanResult(symbol=symbol, error=repr(exc))
+
+
+def _cache_key(symbols: list[str], mode: Mode) -> str:
+    return f"{mode}:{','.join(symbols)}"
+
+
+def _cache_ttl(mode: Mode) -> int:
+    return settings.cache_ttl_main_seconds if mode == "main" else settings.cache_ttl_sub_seconds
+
+
+async def scan_symbols(symbols: list[str], mode: Mode = "main") -> ScanResponse:
+    started = time.perf_counter()
+    requested_symbols = [s.upper() for s in symbols[: settings.max_symbols_per_scan]]
+    key = _cache_key(requested_symbols, mode)
+    now = time.time()
+    cached = _cache.get(key)
+    if cached and now - cached[0] <= _cache_ttl(mode):
+        response = cached[1].model_copy(deep=True)
+        if response.diagnostics:
+            response.diagnostics.cache_hit = True
+        return response
+
+    tasks = [_safe_analyze_symbol(sym, mode=mode) for sym in requested_symbols]
+    results = await asyncio.gather(*tasks)
+
     clean: list[SignalResponse] = []
+    failed_symbols: list[str] = []
+    success_count = 0
+
     for result in results:
-        if isinstance(result, Exception):
+        if result.error:
+            failed_symbols.append(result.symbol)
             continue
-        if mode == "main" and result.grade == "main":
-            clean.append(result)
-        elif mode == "sub" and result.grade == "sub":
-            clean.append(result)
+        success_count += 1
+        assert result.signal is not None
+        if mode == "main" and result.signal.grade == "main":
+            clean.append(result.signal)
+        elif mode == "sub" and result.signal.grade == "sub":
+            clean.append(result.signal)
+
     clean.sort(key=lambda x: x.score, reverse=True)
-    return clean
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    diagnostics = ScanDiagnostics(
+        requested_count=len(symbols),
+        scanned_count=len(requested_symbols),
+        success_count=success_count,
+        failed_count=len(failed_symbols),
+        filtered_count=max(success_count - len(clean), 0),
+        failed_symbols=failed_symbols,
+        duration_ms=duration_ms,
+        cache_hit=False,
+    )
+    response = ScanResponse(mode=mode, count=len(clean), results=clean, diagnostics=diagnostics)
+    _cache[key] = (now, response.model_copy(deep=True))
+    logger.info(
+        "scan completed mode=%s scanned=%s success=%s failed=%s filtered=%s duration_ms=%s",
+        mode,
+        diagnostics.scanned_count,
+        diagnostics.success_count,
+        diagnostics.failed_count,
+        diagnostics.filtered_count,
+        diagnostics.duration_ms,
+    )
+    return response
