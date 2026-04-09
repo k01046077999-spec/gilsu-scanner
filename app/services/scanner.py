@@ -113,21 +113,36 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
     risk = metrics.get("risk_management", {})
     fib = metrics.get("fib", {})
     current = metrics.get("current_price")
+    fib_0382 = fib.get("0.382")
     fib_05 = fib.get("0.5")
+    fib_0618 = fib.get("0.618")
 
     if current is None or fib_05 is None:
         reasons.append("fib/current_price_missing")
-    elif signal.side == "bullish" and current > fib_05:
-        reasons.append("late_entry_above_fib_0.5")
-    elif signal.side == "bearish" and current < fib_05:
-        reasons.append("late_entry_below_fib_0.5")
+    elif mode == "main":
+        if signal.side == "bullish" and current > fib_05:
+            reasons.append("late_entry_above_fib_0.5")
+        elif signal.side == "bearish" and current < fib_05:
+            reasons.append("late_entry_below_fib_0.5")
+    else:
+        if fib_0382 is not None:
+            if signal.side == "bullish" and current > fib_0382:
+                reasons.append("late_entry_above_fib_0.382")
+            elif signal.side == "bearish" and current < fib_0382:
+                reasons.append("late_entry_below_fib_0.382")
+        elif fib_0618 is not None:
+            if signal.side == "bullish" and current > fib_0618 * 1.02:
+                reasons.append("late_entry_far_above_fib_0.618")
+            elif signal.side == "bearish" and current < fib_0618 * 0.98:
+                reasons.append("late_entry_far_below_fib_0.618")
 
-    min_rr = 1.25 if mode == "main" else 0.95
+    min_rr = 1.25 if mode == "main" else 0.8
     if risk.get("rr_tp2", 0) < min_rr:
         reasons.append(f"rr_tp2_below_{min_rr}")
 
-    if risk.get("tp1_pct", 0) < 1.0:
-        reasons.append("tp1_pct_below_1.0")
+    min_tp1_pct = 1.0 if mode == "main" else 0.6
+    if risk.get("tp1_pct", 0) < min_tp1_pct:
+        reasons.append(f"tp1_pct_below_{min_tp1_pct}")
 
     return len(reasons) == 0, reasons
 
@@ -192,8 +207,9 @@ def _build_top_picks(results: list[SignalResponse], mode: Mode) -> list[TopPick]
         risk = metrics.get("risk_management", {}) or {}
         rr = float(risk.get("rr_tp2") or 0.0)
         tp2_pct = float(risk.get("tp2_pct") or 0.0)
-        min_rr = 1.25 if mode == "main" else 0.95
-        if rr < min_rr or tp2_pct < 5.0:
+        min_rr = 1.25 if mode == "main" else 0.8
+        min_tp2_pct = 5.0 if mode == "main" else 4.0
+        if rr < min_rr or tp2_pct < min_tp2_pct:
             continue
         rank_score, rr, volume_ratio, tp2_pct = rank_components(signal)
         eligible.append((signal, rank_score, rr, volume_ratio, tp2_pct))
@@ -276,7 +292,7 @@ def _score_side(primary: dict, lower: dict, higher: dict, fib: dict, df_1h, side
         score += 18
         reasons.append("Fib 0.618~0.786 핵심 구간 진입")
     elif fib.get("near_zone"):
-        score += 9
+        score += 9 if mode == "main" else 14
         reasons.append("Fib 핵심 구간 인접")
 
     if fib.get("anchor_source") == "swing_anchored":
@@ -292,6 +308,9 @@ def _score_side(primary: dict, lower: dict, higher: dict, fib: dict, df_1h, side
     if _volume_ok(df_1h):
         score += 8
         reasons.append("거래량 증가 확인")
+    elif mode == "sub":
+        score += 3
+        reasons.append("거래량 평이")
     if _resistance_room(df_1h, side, min_pct=3.0):
         score += 5
         reasons.append("목표 방향 여유 존재")
@@ -345,7 +364,11 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
         structural_ok = primary.get("chain") and fib.get("in_zone") and not fib.get("invalidated")
         grade = "main" if structural_ok and score >= settings.main_threshold else "reject"
     else:
-        structural_ok = primary.get("chain") or (primary.get("general") and (lower.get("found") or higher.get("found")))
+        structural_ok = (
+            primary.get("chain")
+            or (primary.get("general") and (lower.get("found") or higher.get("found")))
+            or (primary.get("general") and fib.get("near_zone"))
+        )
         grade = "sub" if structural_ok and score >= settings.sub_threshold and not fib.get("invalidated") else "reject"
 
     entry_zone = [round(x, 6) for x in fib.get("entry_zone", [])] if fib.get("entry_zone") else None

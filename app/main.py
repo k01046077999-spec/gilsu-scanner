@@ -9,7 +9,7 @@ from app.services.scanner import analyze_symbol, scan_symbols
 
 app = FastAPI(
     title="길수매매법 코인 검색기",
-    version="0.6.0",
+    version="0.7.0",
     description="업비트 KRW 마켓 전용 1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기",
 )
 
@@ -28,7 +28,7 @@ async def shutdown_event():
 async def root():
     return {
         "service": "gilsu-scanner",
-        "version": "0.6.0",
+        "version": "0.7.0",
         "endpoints": ["/health", "/ready", "/scan/main", "/scan/sub", "/scan/symbol/{symbol}"],
     }
 
