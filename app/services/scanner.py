@@ -455,7 +455,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode}
+    diagnostics: dict = {"mode": mode, "version": "0.7.1"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
