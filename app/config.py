@@ -3,18 +3,18 @@ from pydantic import BaseModel
 
 class Settings(BaseModel):
     default_symbols: list[str] = [
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-        "XRPUSDT",
-        "BNBUSDT",
-        "DOGEUSDT",
-        "ADAUSDT",
-        "AVAXUSDT",
-        "LINKUSDT",
-        "SUIUSDT",
-        "WIFUSDT",
-        "PEPEUSDT",
+        "KRW-BTC",
+        "KRW-ETH",
+        "KRW-XRP",
+        "KRW-SOL",
+        "KRW-DOGE",
+        "KRW-ADA",
+        "KRW-SUI",
+        "KRW-LINK",
+        "KRW-AVAX",
+        "KRW-TRX",
+        "KRW-HBAR",
+        "KRW-XLM",
     ]
     default_limit: int = 250
     prefilter_limit: int = 160

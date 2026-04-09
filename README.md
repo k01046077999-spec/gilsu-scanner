@@ -1,6 +1,6 @@
-# 길수매매법 코인 검색기 MVP
+# 길수매매법 코인 검색기 v0.6 업비트 전용
 
-이 프로젝트는 업로드된 PDF의 핵심 원칙을 바탕으로 만든 **코인 추천 검색기**의 첫 번째 실행 가능한 버전입니다.
+이 프로젝트는 업로드된 PDF의 핵심 원칙을 바탕으로 만든 **업비트 KRW 마켓 코인 추천 검색기**의 첫 번째 실행 가능한 버전입니다.
 
 ## 반영한 핵심 원칙
 - 1시간봉 중심으로 해석한다.
@@ -43,7 +43,7 @@ uvicorn app.main:app --reload
 ```bash
 curl 'http://127.0.0.1:8000/scan/main'
 curl 'http://127.0.0.1:8000/scan/sub'
-curl 'http://127.0.0.1:8000/scan/symbol/BTCUSDT?mode=main'
+curl 'http://127.0.0.1:8000/scan/symbol/BTC?mode=main'
 ```
 
 ## Render 배포
@@ -53,7 +53,7 @@ curl 'http://127.0.0.1:8000/scan/symbol/BTCUSDT?mode=main'
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
 ## 한계
-이 버전은 **MVP**다.
+이 버전은 **v0.6 업비트 전용**다.
 즉, PDF에서 말하는 “이쁜 그림”을 완벽 재현하지는 못한다. 그 부분은 결국 수치화 문제다.
 현재는 아래 방식으로 최대한 기계화했다.
 - 스윙 고저점 탐색
@@ -70,7 +70,7 @@ curl 'http://127.0.0.1:8000/scan/symbol/BTCUSDT?mode=main'
 
 
 ## v0.4.0 추가 사항
-- Binance USDT 무기한 상위 거래대금 종목 자동 스캔
+- Upbit KRW 마켓 상위 거래대금 종목 자동 스캔
 - 1차 프리필터 후 2차 정밀 분석
 - 메인/서브 자동 추천 `top_picks` 제공
 - 손절/익절 자동 계산(Fib 1, 최근 스윙, Fib 1.272)
@@ -79,3 +79,18 @@ curl 'http://127.0.0.1:8000/scan/symbol/BTCUSDT?mode=main'
 
 ## 추가 엔드포인트
 - `GET /scan/sub/top` : 서브 후보 중 TOP 추천만 간단 조회
+
+
+## v0.6.0 업비트 전용
+- Binance 의존 제거, Upbit KRW 마켓 전용으로 전환
+- 수동 조회 시 `BTC`, `XRP`처럼 넣어도 내부적으로 `KRW-BTC`, `KRW-XRP`로 정규화
+- 응답 최상단에 손절/익절 퍼센트 필드 직접 노출
+
+## v0.5.0 고도화
+- PDF 원칙 재반영: 1h 중심, 1h 이하에서 다이버전스 연계 우선
+- 일반 다이버전스는 서브에서만 허용하고 30m/4h 보조확인 없으면 약하게 처리
+- Fib를 단순 80봉 max/min이 아니라 최근 스윙 저점/고점 기반으로 우선 앵커링
+- 다이버전스 강도 계산 추가: 가격 이동폭, RSI 이동폭, 꼭지점 간 간격, 극단구간 여부 반영
+- 메인은 `1h 연계 + Fib 핵심구간`이 사실상 필수
+- 메트릭에 primary/lower/higher divergence와 fib anchor source를 노출
+- 실전용 practical filter 재조정

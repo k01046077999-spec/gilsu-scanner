@@ -19,6 +19,9 @@ class SignalResponse(BaseModel):
     tp1: float | None = None
     tp2: float | None = None
     current_price: float | None = None
+    stop_loss_pct: float | None = None
+    tp1_pct: float | None = None
+    tp2_pct: float | None = None
     reasons: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
 
@@ -33,6 +36,9 @@ class TopPick(BaseModel):
     tp2_pct: float | None = None
     volume_ratio: float | None = None
     current_price: float | None = None
+    stop_loss_pct: float | None = None
+    tp1_pct: float | None = None
+    tp2_pct: float | None = None
     stop_loss: float | None = None
     tp1: float | None = None
     tp2: float | None = None

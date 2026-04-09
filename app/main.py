@@ -4,13 +4,13 @@ from fastapi import FastAPI, Query
 
 from app.config import settings
 from app.models import ScanResponse, SignalResponse, TopPicksResponse
-from app.services.binance_client import close_client, get_client
+from app.services.upbit_client import close_client, get_client, normalize_market_symbol
 from app.services.scanner import analyze_symbol, scan_symbols
 
 app = FastAPI(
     title="길수매매법 코인 검색기",
-    version="0.4.0",
-    description="1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기 끝판왕 버전",
+    version="0.6.0",
+    description="업비트 KRW 마켓 전용 1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기",
 )
 
 
@@ -28,7 +28,7 @@ async def shutdown_event():
 async def root():
     return {
         "service": "gilsu-scanner",
-        "version": "0.4.0",
+        "version": "0.6.0",
         "endpoints": ["/health", "/ready", "/scan/main", "/scan/sub", "/scan/symbol/{symbol}"],
     }
 
@@ -98,4 +98,4 @@ async def scan_sub_top(symbols: str | None = Query(default=None, description="co
 
 @app.get("/scan/symbol/{symbol}", response_model=SignalResponse)
 async def scan_symbol(symbol: str, mode: str = Query("main", pattern="^(main|sub)$")):
-    return await analyze_symbol(symbol.upper(), mode=mode)
+    return await analyze_symbol(normalize_market_symbol(symbol), mode=mode)
