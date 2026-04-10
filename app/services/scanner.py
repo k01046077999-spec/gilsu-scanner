@@ -60,49 +60,112 @@ def _trend_guard(df, side: str) -> bool:
 
 
 
+def _pct_change(from_price: float, to_price: float) -> float:
+    return ((to_price / from_price) - 1.0) * 100.0
+
+
+
+def _normalize_long_targets(entry_reference: float, stop_loss: float, tp_candidates: list[float | None]) -> dict:
+    if stop_loss >= entry_reference:
+        return {"valid": False, "tp1": None, "tp2": None, "reason": "stop_not_below_entry"}
+
+    clean = [float(x) for x in tp_candidates if x is not None and float(x) > entry_reference]
+    clean = sorted(set(clean))
+    if len(clean) < 2:
+        return {"valid": False, "tp1": None, "tp2": None, "reason": "not_enough_valid_tp_candidates"}
+
+    tp1, tp2 = clean[0], clean[1]
+    if not (stop_loss < entry_reference < tp1 < tp2):
+        return {"valid": False, "tp1": tp1, "tp2": tp2, "reason": "tp_order_invalid"}
+    return {"valid": True, "tp1": tp1, "tp2": tp2, "reason": None}
+
+
+
+def _normalize_short_targets(entry_reference: float, stop_loss: float, tp_candidates: list[float | None]) -> dict:
+    if stop_loss <= entry_reference:
+        return {"valid": False, "tp1": None, "tp2": None, "reason": "stop_not_above_entry"}
+
+    clean = [float(x) for x in tp_candidates if x is not None and float(x) < entry_reference]
+    clean = sorted(set(clean), reverse=True)
+    if len(clean) < 2:
+        return {"valid": False, "tp1": None, "tp2": None, "reason": "not_enough_valid_tp_candidates"}
+
+    tp1, tp2 = clean[0], clean[1]
+    if not (tp2 < tp1 < entry_reference < stop_loss):
+        return {"valid": False, "tp1": tp1, "tp2": tp2, "reason": "tp_order_invalid"}
+    return {"valid": True, "tp1": tp1, "tp2": tp2, "reason": None}
+
+
+
 def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_1h):
     fib_0_5 = fib.get("fib_0_5")
     fib_1 = fib.get("fib_1")
     fib_1272 = fib.get("fib_1272")
+    fib_1618 = fib.get("fib_1618")
     recent_high = float(df_1h["high"].tail(40).max())
     recent_low = float(df_1h["low"].tail(40).min())
+    entry_reference = float(current_price)
 
     if chosen_side == "bullish":
         stop_loss = float(fib_1)
-        tp1 = recent_high
-        tp2 = float(fib_1272) if fib_1272 is not None else current_price * 1.08
-        risk = current_price - stop_loss
-        reward_tp1 = tp1 - current_price
-        reward_tp2 = tp2 - current_price
-        stop_loss_pct = ((stop_loss / current_price) - 1.0) * 100
-        tp1_pct = ((tp1 / current_price) - 1.0) * 100
-        tp2_pct = ((tp2 / current_price) - 1.0) * 100
+        normalized = _normalize_long_targets(
+            entry_reference=entry_reference,
+            stop_loss=stop_loss,
+            tp_candidates=[recent_high, fib_1272, fib_1618, entry_reference * 1.08, entry_reference * 1.12],
+        )
+        tp1 = normalized.get("tp1")
+        tp2 = normalized.get("tp2")
+        valid = bool(normalized.get("valid"))
+        invalid_reason = normalized.get("reason")
+        stop_loss_pct = _pct_change(entry_reference, stop_loss)
+        tp1_pct = _pct_change(entry_reference, tp1) if tp1 is not None else None
+        tp2_pct = _pct_change(entry_reference, tp2) if tp2 is not None else None
+        risk = entry_reference - stop_loss
+        reward_tp1 = (tp1 - entry_reference) if tp1 is not None else None
+        reward_tp2 = (tp2 - entry_reference) if tp2 is not None else None
     else:
         stop_loss = float(fib_1)
-        tp1 = recent_low
-        tp2 = float(fib_1272) if fib_1272 is not None else current_price * 0.92
-        risk = stop_loss - current_price
-        reward_tp1 = current_price - tp1
-        reward_tp2 = current_price - tp2
-        stop_loss_pct = ((current_price / stop_loss) - 1.0) * 100
-        tp1_pct = ((current_price / tp1) - 1.0) * 100
-        tp2_pct = ((current_price / tp2) - 1.0) * 100
+        normalized = _normalize_short_targets(
+            entry_reference=entry_reference,
+            stop_loss=stop_loss,
+            tp_candidates=[recent_low, fib_1272, fib_1618, entry_reference * 0.92, entry_reference * 0.88],
+        )
+        tp1 = normalized.get("tp1")
+        tp2 = normalized.get("tp2")
+        valid = bool(normalized.get("valid"))
+        invalid_reason = normalized.get("reason")
+        stop_loss_pct = ((entry_reference / stop_loss) - 1.0) * 100
+        tp1_pct = ((entry_reference / tp1) - 1.0) * 100 if tp1 is not None and tp1 != 0 else None
+        tp2_pct = ((entry_reference / tp2) - 1.0) * 100 if tp2 is not None and tp2 != 0 else None
+        risk = stop_loss - entry_reference
+        reward_tp1 = (entry_reference - tp1) if tp1 is not None else None
+        reward_tp2 = (entry_reference - tp2) if tp2 is not None else None
 
-    rr_tp1 = reward_tp1 / risk if risk > 0 else 0.0
-    rr_tp2 = reward_tp2 / risk if risk > 0 else 0.0
+    rr_tp1 = (reward_tp1 / risk) if risk > 0 and reward_tp1 is not None else 0.0
+    rr_tp2 = (reward_tp2 / risk) if risk > 0 and reward_tp2 is not None else 0.0
+
+    pct_order_valid = False
+    if tp1_pct is not None and tp2_pct is not None:
+        pct_order_valid = stop_loss_pct < 0 < tp1_pct < tp2_pct
+
+    if valid and not pct_order_valid:
+        valid = False
+        invalid_reason = "pct_order_invalid"
 
     return {
-        "entry_reference": round(current_price, 6),
+        "entry_reference": round(entry_reference, 6),
         "stop_loss": round(stop_loss, 6),
         "stop_loss_pct": round(stop_loss_pct, 2),
-        "tp1": round(tp1, 6),
-        "tp1_pct": round(tp1_pct, 2),
-        "tp2": round(tp2, 6),
-        "tp2_pct": round(tp2_pct, 2),
+        "tp1": round(tp1, 6) if tp1 is not None else None,
+        "tp1_pct": round(tp1_pct, 2) if tp1_pct is not None else None,
+        "tp2": round(tp2, 6) if tp2 is not None else None,
+        "tp2_pct": round(tp2_pct, 2) if tp2_pct is not None else None,
         "rr_tp1": round(rr_tp1, 2),
         "rr_tp2": round(rr_tp2, 2),
+        "valid": valid,
+        "invalid_reason": invalid_reason,
         "invalidation_rule": "fib_1_break",
-        "fib_entry_reference": round(float(fib_0_5 or current_price), 6),
+        "fib_entry_reference": round(float(fib_0_5 or entry_reference), 6),
     }
 
 
@@ -136,12 +199,35 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
             elif signal.side == "bearish" and current < fib_0618 * 0.98:
                 reasons.append("late_entry_far_below_fib_0.618")
 
+    if not risk.get("valid", False):
+        reasons.append(risk.get("invalid_reason") or "risk_management_invalid")
+        return False, reasons
+
+    entry_reference = risk.get("entry_reference")
+    stop_loss = risk.get("stop_loss")
+    tp1 = risk.get("tp1")
+    tp2 = risk.get("tp2")
+    stop_loss_pct = risk.get("stop_loss_pct")
+    tp1_pct = risk.get("tp1_pct")
+    tp2_pct = risk.get("tp2_pct")
+
+    if signal.side == "bullish":
+        if not (stop_loss < entry_reference < tp1 < tp2):
+            reasons.append("invalid_tp_structure")
+        if not (stop_loss_pct < 0 < tp1_pct < tp2_pct):
+            reasons.append("invalid_pct_structure")
+    else:
+        if not (tp2 < tp1 < entry_reference < stop_loss):
+            reasons.append("invalid_tp_structure")
+        if not (stop_loss_pct < 0 < tp1_pct < tp2_pct):
+            reasons.append("invalid_pct_structure")
+
     min_rr = 1.25 if mode == "main" else 0.8
     if risk.get("rr_tp2", 0) < min_rr:
         reasons.append(f"rr_tp2_below_{min_rr}")
 
     min_tp1_pct = 1.0 if mode == "main" else 0.6
-    if risk.get("tp1_pct", 0) < min_tp1_pct:
+    if (risk.get("tp1_pct") or 0) < min_tp1_pct:
         reasons.append(f"tp1_pct_below_{min_tp1_pct}")
 
     return len(reasons) == 0, reasons
@@ -455,7 +541,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.1"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.2"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]

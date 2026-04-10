@@ -1,10 +1,10 @@
-# 길수매매법 코인 검색기 v0.7.1 업비트 전용
+# 길수매매법 코인 검색기 v0.7.2 업비트 전용
 
 이 프로젝트는 업로드된 PDF의 핵심 원칙을 바탕으로 만든 **업비트 KRW 마켓 전용 길수매매법 검색기**입니다.
 이번 패키지는 **README / 코드 버전 / 설정값 / API 확인값**을 일치시킨 정합본입니다.
 
 ## 이번 버전의 기준
-- 버전: `0.7.1`
+- 버전: `0.7.2`
 - 거래소: **Upbit KRW market only**
 - 메인: 엄격 유지
 - 서브: 탐색형으로 완화
@@ -18,7 +18,7 @@
 - Fib `1.0` 이탈 시 무효
 - RSI는 중간 구간보다 극단 구간의 신호를 더 높게 평가
 
-## v0.7.1 반영 내용
+## v0.7.2 반영 내용
 ### 공통
 - Upbit KRW 마켓 전용 유지
 - 손절/익절 퍼센트 출력 유지
@@ -67,9 +67,9 @@ curl 'http://127.0.0.1:8000/scan/symbol/BTC?mode=main'
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
 ## 배포 후 검증 포인트
-1. `/` 에서 `version = 0.7.1` 확인
+1. `/` 에서 `version = 0.7.2` 확인
 2. `/ready` 에서 `universe_size = 120`, `prefilter_size = 50` 확인
-3. `/scan/sub` diagnostics 에서 `version = 0.7.1` 확인
+3. `/scan/sub` diagnostics 에서 `version = 0.7.2` 확인
 
 ## 주의
 이 버전은 **전략 정합성 정리본**이다.
