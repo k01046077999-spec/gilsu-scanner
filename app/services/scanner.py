@@ -288,13 +288,15 @@ def _build_top_picks(results: list[SignalResponse], mode: Mode) -> list[TopPick]
     eligible = []
     for signal in results:
         metrics = signal.metrics or {}
+        if signal.side != "bullish":
+            continue
         if not metrics.get("practical_filter_passed", False):
             continue
         risk = metrics.get("risk_management", {}) or {}
         rr = float(risk.get("rr_tp2") or 0.0)
         tp2_pct = float(risk.get("tp2_pct") or 0.0)
         min_rr = 1.25 if mode == "main" else 0.8
-        min_tp2_pct = 5.0 if mode == "main" else 4.0
+        min_tp2_pct = 5.0 if mode == "main" else 2.0
         if rr < min_rr or tp2_pct < min_tp2_pct:
             continue
         rank_score, rr, volume_ratio, tp2_pct = rank_components(signal)
@@ -457,6 +459,10 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
         )
         grade = "sub" if structural_ok and score >= settings.sub_threshold and not fib.get("invalidated") else "reject"
 
+    # 업비트 현물용 롱 전용 강제 필터
+    if chosen_side != "bullish":
+        grade = "reject"
+
     entry_zone = [round(x, 6) for x in fib.get("entry_zone", [])] if fib.get("entry_zone") else None
     risk_management = _calc_risk_management(current_price, fib, chosen_side, df_1h)
 
@@ -506,8 +512,14 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
         metrics=metrics,
     )
     passed, filter_reasons = _passes_practical_filter(signal, mode)
+    if chosen_side != "bullish":
+        passed = False
+        filter_reasons = list(filter_reasons) + ["non_bullish_filtered"]
+
     signal.metrics["practical_filter_passed"] = passed
     signal.metrics["practical_filter_reasons"] = filter_reasons
+    if filter_reasons:
+        signal.metrics["invalid_reason"] = filter_reasons[0]
     if not passed:
         signal.grade = "reject"
     return signal
@@ -541,7 +553,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.2"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.3"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
