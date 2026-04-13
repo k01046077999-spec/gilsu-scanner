@@ -1,8 +1,16 @@
 services:
   - type: web
-    name: gilsu-scanner
-    env: python
+    name: kai-upbit-final-scanner
+    runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
+    envVars:
+      - key: UPBIT_BASE_URL
+        value: https://api.upbit.com
+      - key: APP_VERSION
+        value: 3.0.0-final-dynamic
+      - key: SCAN_MARKET_LIMIT
+        value: "80"
+      - key: TOP_PICK_COUNT
+        value: "8"

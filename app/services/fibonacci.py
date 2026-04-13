@@ -3,114 +3,63 @@ from __future__ import annotations
 import pandas as pd
 
 
-def _fallback_chunk(df: pd.DataFrame, lookback: int) -> pd.DataFrame:
-    return df.tail(lookback).copy()
-
-
-def _bullish_anchor_points(df: pd.DataFrame, lookback: int):
-    chunk = _fallback_chunk(df, lookback)
-    if "swing_low" not in chunk.columns or "swing_high" not in chunk.columns:
-        return float(chunk["low"].min()), float(chunk["high"].max()), "range_fallback"
-
-    highs = chunk[chunk["swing_high"]].tail(3)
-    for high_idx, high_row in highs.iloc[::-1].iterrows():
-        lows_before = chunk.loc[:high_idx]
-        lows_before = lows_before[lows_before["swing_low"]]
-        if not lows_before.empty:
-            low_row = lows_before.iloc[-1]
-            if float(high_row["high"]) > float(low_row["low"]):
-                return float(low_row["low"]), float(high_row["high"]), "swing_anchored"
-    return float(chunk["low"].min()), float(chunk["high"].max()), "range_fallback"
-
-
-
-def _bearish_anchor_points(df: pd.DataFrame, lookback: int):
-    chunk = _fallback_chunk(df, lookback)
-    if "swing_low" not in chunk.columns or "swing_high" not in chunk.columns:
-        return float(chunk["low"].min()), float(chunk["high"].max()), "range_fallback"
-
-    lows = chunk[chunk["swing_low"]].tail(3)
-    for low_idx, low_row in lows.iloc[::-1].iterrows():
-        highs_before = chunk.loc[:low_idx]
-        highs_before = highs_before[highs_before["swing_high"]]
-        if not highs_before.empty:
-            high_row = highs_before.iloc[-1]
-            if float(high_row["high"]) > float(low_row["low"]):
-                return float(low_row["low"]), float(high_row["high"]), "swing_anchored"
-    return float(chunk["low"].min()), float(chunk["high"].max()), "range_fallback"
-
-
-
-def bullish_fib_zone(df: pd.DataFrame, lookback: int = 80) -> dict:
-    swing_low, swing_high, anchor_source = _bullish_anchor_points(df, lookback)
-    current = float(df["close"].iloc[-1])
-    range_ = swing_high - swing_low
-    if range_ <= 0:
-        return {"valid": False}
-
-    fib_382 = swing_high - range_ * 0.382
-    fib_05 = swing_high - range_ * 0.5
-    fib_618 = swing_high - range_ * 0.618
-    fib_786 = swing_high - range_ * 0.786
-    fib_1 = swing_low
-    fib_1272 = swing_high + range_ * 0.272
-    fib_1618 = swing_high + range_ * 0.618
-    in_zone = min(fib_618, fib_786) <= current <= max(fib_618, fib_786)
-    near_zone = min(fib_05, fib_786) <= current <= max(fib_05, fib_786) * 1.01 and current >= fib_1
-    invalidated = current < fib_1
-
+def build_retracement(low: float, high: float) -> dict:
+    diff = high - low
     return {
-        "valid": True,
-        "anchor_source": anchor_source,
-        "anchor_low": swing_low,
-        "anchor_high": swing_high,
-        "fib_382": fib_382,
-        "fib_0_5": fib_05,
-        "fib_618": fib_618,
-        "fib_786": fib_786,
-        "fib_1": fib_1,
-        "fib_1272": fib_1272,
-        "fib_1618": fib_1618,
-        "in_zone": in_zone,
-        "near_zone": near_zone,
-        "invalidated": invalidated,
-        "entry_zone": sorted([fib_786, fib_618]),
+        'anchor_low': low,
+        'anchor_high': high,
+        'fib_0': high,
+        'fib_0618': high - diff * 0.618,
+        'fib_0786': high - diff * 0.786,
+        'fib_1': low,
+        'ext_1272': high + diff * 0.272,
+        'ext_1618': high + diff * 0.618,
     }
 
 
+def zone_status(price: float, fib_0618: float, fib_0786: float, tolerance_pct: float) -> str:
+    lo = min(fib_0618, fib_0786)
+    hi = max(fib_0618, fib_0786)
+    tol = hi * tolerance_pct / 100.0
+    if lo <= price <= hi:
+        return 'in_zone'
+    if (lo - tol) <= price <= (hi + tol):
+        return 'near_zone'
+    return 'out_zone'
 
-def bearish_fib_zone(df: pd.DataFrame, lookback: int = 80) -> dict:
-    swing_low, swing_high, anchor_source = _bearish_anchor_points(df, lookback)
-    current = float(df["close"].iloc[-1])
-    range_ = swing_high - swing_low
-    if range_ <= 0:
-        return {"valid": False}
 
-    fib_382 = swing_low + range_ * 0.382
-    fib_05 = swing_low + range_ * 0.5
-    fib_618 = swing_low + range_ * 0.618
-    fib_786 = swing_low + range_ * 0.786
-    fib_1 = swing_high
-    fib_1272 = swing_low - range_ * 0.272
-    fib_1618 = swing_low - range_ * 0.618
-    in_zone = min(fib_618, fib_786) <= current <= max(fib_618, fib_786)
-    near_zone = min(fib_05, fib_618) * 0.99 <= current <= fib_1
-    invalidated = current > fib_1
+def recent_bullish_swing(df: pd.DataFrame, pivot_highs: pd.DataFrame, pivot_lows: pd.DataFrame) -> dict | None:
+    if len(pivot_highs) < 2 or len(pivot_lows) < 1:
+        return None
 
-    return {
-        "valid": True,
-        "anchor_source": anchor_source,
-        "anchor_low": swing_low,
-        "anchor_high": swing_high,
-        "fib_382": fib_382,
-        "fib_0_5": fib_05,
-        "fib_618": fib_618,
-        "fib_786": fib_786,
-        "fib_1": fib_1,
-        "fib_1272": fib_1272,
-        "fib_1618": fib_1618,
-        "in_zone": in_zone,
-        "near_zone": near_zone,
-        "invalidated": invalidated,
-        "entry_zone": sorted([fib_618, fib_786]),
-    }
+    highs = pivot_highs.reset_index()
+    lows = pivot_lows.reset_index()
+
+    for h_idx in range(len(highs) - 1, 0, -1):
+        latest_high_i = int(highs.loc[h_idx, 'index'])
+        prev_high_i = int(highs.loc[h_idx - 1, 'index'])
+        latest_high = float(highs.loc[h_idx, 'high'])
+        prev_high = float(highs.loc[h_idx - 1, 'high'])
+        if latest_high <= prev_high:
+            continue
+
+        low_candidates = lows[lows['index'] < latest_high_i]
+        if low_candidates.empty:
+            continue
+        anchor_low_row = low_candidates.iloc[-1]
+        anchor_low_i = int(anchor_low_row['index'])
+        anchor_low = float(anchor_low_row['low'])
+        if anchor_low_i >= latest_high_i:
+            continue
+        if latest_high_i - anchor_low_i < 4:
+            continue
+
+        fib = build_retracement(anchor_low, latest_high)
+        return {
+            'anchor_low_index': anchor_low_i,
+            'anchor_high_index': latest_high_i,
+            'previous_high_index': prev_high_i,
+            'breakout_confirmed': latest_high > prev_high,
+            **fib,
+        }
+    return None
