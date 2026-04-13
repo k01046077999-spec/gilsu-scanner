@@ -36,7 +36,7 @@ async def get_client() -> httpx.AsyncClient:
         if _client is None:
             _client = httpx.AsyncClient(
                 timeout=settings.request_timeout,
-                headers={"User-Agent": "gilsu-scanner/0.8.0"},
+                headers={"User-Agent": "gilsu-scanner/0.8.1"},
                 limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
             )
         return _client

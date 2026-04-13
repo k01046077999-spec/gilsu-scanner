@@ -538,6 +538,47 @@ def _placeholder_divergence() -> dict:
     return {"found": False, "general": False, "chain": False, "extreme": False, "strong_extreme": False, "strength": 0.0}
 
 
+def _quick_rank_snapshot(df_1h, mode: Mode) -> dict:
+    bull_1h = detect_bullish_divergence_chain(latest_swing_lows(df_1h, 4))
+    bear_1h = detect_bearish_divergence_chain(latest_swing_highs(df_1h, 4))
+    bull_fib = bullish_fib_zone(df_1h)
+    bear_fib = bearish_fib_zone(df_1h)
+    bull_score_quick, bull_reasons_quick = _score_side(
+        bull_1h, _placeholder_divergence(), _placeholder_divergence(), bull_fib, df_1h, "bullish", mode
+    )
+    bear_score_quick, bear_reasons_quick = _score_side(
+        bear_1h, _placeholder_divergence(), _placeholder_divergence(), bear_fib, df_1h, "bearish", mode
+    )
+    bull_gate = _quick_bullish_gate(bull_1h, bull_fib, df_1h, mode)
+    bull_rank = float(bull_score_quick)
+    if bull_gate:
+        bull_rank += 8.0
+    if bull_1h.get("chain"):
+        bull_rank += 6.0
+    elif bull_1h.get("general"):
+        bull_rank += 3.0
+    if bull_fib.get("in_zone"):
+        bull_rank += 6.0
+    elif bull_fib.get("near_zone"):
+        bull_rank += 3.0
+    if _volume_ok(df_1h):
+        bull_rank += 2.0
+    if _overheated(df_1h):
+        bull_rank -= 4.0
+    return {
+        "bull_1h": bull_1h,
+        "bear_1h": bear_1h,
+        "bull_fib": bull_fib,
+        "bear_fib": bear_fib,
+        "bull_score_quick": round(float(bull_score_quick), 2),
+        "bear_score_quick": round(float(bear_score_quick), 2),
+        "bull_reasons_quick": bull_reasons_quick,
+        "bear_reasons_quick": bear_reasons_quick,
+        "bull_gate": bull_gate,
+        "bull_rank": round(float(bull_rank), 2),
+    }
+
+
 def _quick_bullish_gate(primary: dict, fib: dict, df_1h, mode: Mode) -> bool:
     if fib.get("invalidated"):
         return False
@@ -552,21 +593,24 @@ def _quick_bullish_gate(primary: dict, fib: dict, df_1h, mode: Mode) -> bool:
     return False
 
 
-async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None) -> SignalResponse:
+async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None, force_full: bool = False) -> SignalResponse:
     tf_1h = preloaded_1h if preloaded_1h is not None else await fetch_klines(symbol, "1h", settings.default_limit)
     df_1h = find_swings(enrich_indicators(tf_1h, settings.rsi_period), settings.swing_window)
 
-    bull_1h = detect_bullish_divergence_chain(latest_swing_lows(df_1h, 4))
-    bear_1h = detect_bearish_divergence_chain(latest_swing_highs(df_1h, 4))
+    snap = _quick_rank_snapshot(df_1h, mode)
+    bull_1h = snap["bull_1h"]
+    bear_1h = snap["bear_1h"]
     current_price = float(df_1h["close"].iloc[-1])
-    bull_fib = bullish_fib_zone(df_1h)
-    bear_fib = bearish_fib_zone(df_1h)
-
-    bull_score_quick, bull_reasons_quick = _score_side(bull_1h, _placeholder_divergence(), _placeholder_divergence(), bull_fib, df_1h, "bullish", mode)
-    bear_score_quick, bear_reasons_quick = _score_side(bear_1h, _placeholder_divergence(), _placeholder_divergence(), bear_fib, df_1h, "bearish", mode)
+    bull_fib = snap["bull_fib"]
+    bear_fib = snap["bear_fib"]
+    bull_score_quick = snap["bull_score_quick"]
+    bear_score_quick = snap["bear_score_quick"]
+    bull_reasons_quick = snap["bull_reasons_quick"]
+    bear_reasons_quick = snap["bear_reasons_quick"]
 
     quick_side = "bullish" if bull_score_quick >= bear_score_quick else "bearish"
-    if quick_side != "bullish" or not _quick_bullish_gate(bull_1h, bull_fib, df_1h, mode):
+    should_quick_reject = (quick_side != "bullish" or not snap["bull_gate"]) and not force_full
+    if should_quick_reject:
         fib = bull_fib if bull_score_quick >= bear_score_quick else bear_fib
         risk_management = _calc_risk_management(current_price, bull_fib, "bullish", df_1h)
         metrics = {
@@ -597,6 +641,8 @@ async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None) ->
             "risk_management": {**risk_management, "display_order": ["stop_loss_pct", "tp1_pct", "tp2_pct", "stop_loss", "tp1", "tp2"]},
             "structural_reasons": ["quick_gate_reject"],
             "pipeline_stage": "quick_reject",
+            "quick_rank": snap["bull_rank"],
+            "force_full": force_full,
         }
         signal = SignalResponse(
             symbol=normalize_market_symbol(symbol), timeframe="1h", mode=mode, side="bullish", grade="reject",
@@ -707,6 +753,8 @@ async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None) ->
         "risk_management": {**risk_management, "display_order": ["stop_loss_pct", "tp1_pct", "tp2_pct", "stop_loss", "tp1", "tp2"]},
         "structural_reasons": structural_reasons,
         "pipeline_stage": "full_analysis",
+        "quick_rank": snap["bull_rank"],
+        "force_full": force_full,
     }
 
     signal = SignalResponse(
@@ -767,7 +815,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.8.0"}
+    diagnostics: dict = {"mode": mode, "version": "0.8.1"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -786,7 +834,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         "side": "bullish_only",
         "display": "percent_first",
         "watchlist_enabled": True,
-        "stability_patch": "staged_fetch_cache_v080",
+        "stability_patch": "staged_fetch_ranked_v081",
         "main": {
             "min_stop_abs_pct": main_thresholds["min_stop_abs"],
             "min_tp1_pct": main_thresholds["min_tp1_pct"],
@@ -809,6 +857,25 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         },
     }
 
+    quick_meta: dict[str, dict] = {}
+    ranked_quick: list[tuple[str, float]] = []
+    for sym in candidates:
+        tf_1h = cache_1h.get(sym)
+        if tf_1h is None:
+            continue
+        df_1h = find_swings(enrich_indicators(tf_1h, settings.rsi_period), settings.swing_window)
+        snap = _quick_rank_snapshot(df_1h, mode)
+        quick_meta[sym] = snap
+        ranked_quick.append((sym, float(snap["bull_rank"])))
+
+    ranked_quick.sort(key=lambda x: x[1], reverse=True)
+    quick_floor = settings.quick_score_main_floor if mode == "main" else settings.quick_score_sub_floor
+    full_limit = settings.full_analysis_main_limit if mode == "main" else settings.full_analysis_sub_limit
+    above_floor = [sym for sym, score in ranked_quick if score >= quick_floor]
+    min_full = min(len(ranked_quick), 8 if mode == "main" else 10)
+    selected_full = list(dict.fromkeys((above_floor[:full_limit] + [sym for sym, _ in ranked_quick[:max(min_full, min(full_limit, len(ranked_quick)))]])))[:full_limit]
+    selected_full_set = set(selected_full)
+
     sem = asyncio.Semaphore(settings.scan_concurrency)
     failures: list[str] = []
     analyze_failure_reasons: dict[str, int] = {}
@@ -816,7 +883,12 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
     async def guarded_analyze(symbol: str):
         async with sem:
             try:
-                return await analyze_symbol(symbol, mode=mode, preloaded_1h=cache_1h.get(symbol))
+                return await analyze_symbol(
+                    symbol,
+                    mode=mode,
+                    preloaded_1h=cache_1h.get(symbol),
+                    force_full=symbol in selected_full_set,
+                )
             except Exception as exc:
                 failures.append(symbol)
                 msg = str(exc).strip()
@@ -838,10 +910,10 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
     ]
     near_miss_watchlist = [
         r for r in clean
-        if r not in structural_candidates
-        and r.metrics.get("pipeline_stage") == "full_analysis"
+        if r.metrics.get("pipeline_stage") == "full_analysis"
         and r.side == "bullish"
-        and r.score >= ((settings.main_threshold - 8.0) if mode == "main" else (settings.sub_threshold - 6.0))
+        and r.metrics.get("practical_filter_status") != "pass"
+        and r.score >= ((settings.main_threshold - 10.0) if mode == "main" else (settings.sub_threshold - 8.0))
         and not r.metrics.get("fib", {}).get("invalidated")
         and (
             r.metrics.get("primary_divergence", {}).get("found")
@@ -849,6 +921,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
             or r.metrics.get("higher_timeframe_confirmation", {}).get("found")
         )
         and (r.metrics.get("fib", {}).get("in_zone") or r.metrics.get("fib", {}).get("near_zone"))
+        and not any(reason.startswith(("late_entry_far", "invalid_", "fib/", "risk_management_", "non_bullish_", "stop_not_", "tp_order_", "pct_order_")) for reason in r.metrics.get("practical_filter_reasons", []))
     ]
     final_results = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "pass"]
     watchlist = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "watchlist"]
@@ -894,5 +967,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         "duration_ms": int((perf_counter() - start) * 1000),
         "top_pick_count": len(top_picks),
         "cache_reuse_1h": len([s for s in candidates if s in cache_1h]),
+        "full_analysis_selected_count": len(selected_full_set),
+        "quick_score_floor": quick_floor,
     })
     return final_results, watchlist, diagnostics, top_picks
