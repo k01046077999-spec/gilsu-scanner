@@ -16,15 +16,15 @@ class Settings(BaseModel):
         "KRW-HBAR",
         "KRW-XLM",
     ]
-    default_limit: int = 280
-    prefilter_limit: int = 180
+    default_limit: int = 240
+    prefilter_limit: int = 160
     rsi_period: int = 14
     swing_window: int = 2
-    max_symbols_per_scan: int = 70
-    universe_size: int = 120
-    prefilter_size: int = 60
+    max_symbols_per_scan: int = 45
+    universe_size: int = 90
+    prefilter_size: int = 45
     scan_concurrency: int = 2
-    request_timeout: float = 25.0
+    request_timeout: float = 20.0
     top_pick_count: int = 3
     main_threshold: float = 52.0
     sub_threshold: float = 30.0

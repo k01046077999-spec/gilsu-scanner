@@ -14,8 +14,8 @@ _client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
 _request_gate = asyncio.Lock()
 _last_request_ts = 0.0
-MIN_REQUEST_GAP_SEC = 0.18
-DEFAULT_RETRIES = 6
+MIN_REQUEST_GAP_SEC = 0.22
+DEFAULT_RETRIES = 5
 
 
 def normalize_market_symbol(symbol: str) -> str:
@@ -34,7 +34,11 @@ async def get_client() -> httpx.AsyncClient:
     global _client
     async with _client_lock:
         if _client is None:
-            _client = httpx.AsyncClient(timeout=settings.request_timeout, headers={"User-Agent": "gilsu-scanner/0.7.9"})
+            _client = httpx.AsyncClient(
+                timeout=settings.request_timeout,
+                headers={"User-Agent": "gilsu-scanner/0.8.0"},
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            )
         return _client
 
 
@@ -62,7 +66,7 @@ async def _get_json(path: str, params: dict[str, Any] | None = None, retries: in
     client = await get_client()
     url = f"{UPBIT_BASE}{path}"
     last_err: Exception | None = None
-    backoff = 1.2
+    backoff = 1.0
 
     for attempt in range(retries):
         try:
@@ -76,15 +80,15 @@ async def _get_json(path: str, params: dict[str, Any] | None = None, retries: in
             if attempt == retries - 1:
                 break
 
-            sleep_for = backoff + random.uniform(0.0, 0.4)
+            sleep_for = backoff + random.uniform(0.1, 0.5)
             if isinstance(exc, RuntimeError) and str(exc) == "rate_limit_429":
-                sleep_for = max(sleep_for, 2.5 + attempt * 0.8)
-            elif isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code == 429:
-                sleep_for = max(sleep_for, 2.5 + attempt * 0.8)
-            elif isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError)):
-                sleep_for = max(sleep_for, 1.5 + attempt * 0.5)
+                sleep_for = max(sleep_for, 2.4 + attempt * 0.9)
+            elif isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code in {429, 500, 502, 503, 504}:
+                sleep_for = max(sleep_for, 2.0 + attempt * 0.7)
+            elif isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError)):
+                sleep_for = max(sleep_for, 1.4 + attempt * 0.5)
             await asyncio.sleep(sleep_for)
-            backoff = min(backoff * 1.7, 8.0)
+            backoff = min(backoff * 1.6, 6.0)
 
     assert last_err is not None
     raise last_err
@@ -129,7 +133,7 @@ async def fetch_top_symbols(limit: int = 100) -> list[str]:
     )
 
     tradable = {m["market"] for m in markets if str(m.get("market", "")).startswith("KRW-")}
-    blocked_suffixes = ("BTC", "ETH")
+    blocked_suffixes = {"BTC", "ETH"}
     ranked: list[tuple[str, float]] = []
     for row in tickers:
         market = row.get("market")
@@ -146,7 +150,9 @@ async def fetch_top_symbols(limit: int = 100) -> list[str]:
             continue
         if acc_trade_price_24h <= 0 or trade_price <= 0:
             continue
-        liquidity_score = acc_trade_price_24h * (1.0 - min(signed_change_rate, 40.0) / 200.0)
+        if signed_change_rate > 35.0:
+            continue
+        liquidity_score = acc_trade_price_24h * (1.0 - min(signed_change_rate, 30.0) / 180.0)
         ranked.append((market, liquidity_score))
 
     ranked.sort(key=lambda x: x[1], reverse=True)
