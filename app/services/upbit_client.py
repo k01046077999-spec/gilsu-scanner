@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from typing import Any
 
 import httpx
@@ -11,6 +12,10 @@ from app.config import settings
 UPBIT_BASE = "https://api.upbit.com"
 _client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
+_request_gate = asyncio.Lock()
+_last_request_ts = 0.0
+MIN_REQUEST_GAP_SEC = 0.18
+DEFAULT_RETRIES = 6
 
 
 def normalize_market_symbol(symbol: str) -> str:
@@ -18,7 +23,6 @@ def normalize_market_symbol(symbol: str) -> str:
     if symbol.startswith("KRW-"):
         return symbol
     if symbol.startswith("USDT-") or symbol.startswith("BTC-"):
-        # 길수매매법은 업비트 KRW 마켓만 사용
         asset = symbol.split("-", 1)[1]
         return f"KRW-{asset}"
     if symbol.endswith("USDT"):
@@ -30,7 +34,7 @@ async def get_client() -> httpx.AsyncClient:
     global _client
     async with _client_lock:
         if _client is None:
-            _client = httpx.AsyncClient(timeout=settings.request_timeout, headers={"User-Agent": "gilsu-scanner/0.7.6"})
+            _client = httpx.AsyncClient(timeout=settings.request_timeout, headers={"User-Agent": "gilsu-scanner/0.7.9"})
         return _client
 
 
@@ -42,20 +46,46 @@ async def close_client() -> None:
             _client = None
 
 
-async def _get_json(path: str, params: dict[str, Any] | None = None, retries: int = 3) -> Any:
+async def _paced_get(client: httpx.AsyncClient, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
+    global _last_request_ts
+    async with _request_gate:
+        now = asyncio.get_running_loop().time()
+        wait = MIN_REQUEST_GAP_SEC - (now - _last_request_ts)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        resp = await client.get(url, params=params)
+        _last_request_ts = asyncio.get_running_loop().time()
+        return resp
+
+
+async def _get_json(path: str, params: dict[str, Any] | None = None, retries: int = DEFAULT_RETRIES) -> Any:
     client = await get_client()
     url = f"{UPBIT_BASE}{path}"
     last_err: Exception | None = None
+    backoff = 1.2
+
     for attempt in range(retries):
         try:
-            resp = await client.get(url, params=params)
+            resp = await _paced_get(client, url, params=params)
+            if resp.status_code == 429:
+                raise RuntimeError("rate_limit_429")
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             if attempt == retries - 1:
                 break
-            await asyncio.sleep(0.7 * (attempt + 1))
+
+            sleep_for = backoff + random.uniform(0.0, 0.4)
+            if isinstance(exc, RuntimeError) and str(exc) == "rate_limit_429":
+                sleep_for = max(sleep_for, 2.5 + attempt * 0.8)
+            elif isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code == 429:
+                sleep_for = max(sleep_for, 2.5 + attempt * 0.8)
+            elif isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError)):
+                sleep_for = max(sleep_for, 1.5 + attempt * 0.5)
+            await asyncio.sleep(sleep_for)
+            backoff = min(backoff * 1.7, 8.0)
+
     assert last_err is not None
     raise last_err
 

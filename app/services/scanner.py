@@ -709,7 +709,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.8"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.9"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -728,6 +728,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         "side": "bullish_only",
         "display": "percent_first",
         "watchlist_enabled": True,
+        "stability_patch": "rate_limit_backoff_v079",
         "main": {
             "min_stop_abs_pct": main_thresholds["min_stop_abs"],
             "min_tp1_pct": main_thresholds["min_tp1_pct"],
