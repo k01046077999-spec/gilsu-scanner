@@ -28,11 +28,11 @@ def _practical_thresholds(mode: Mode) -> dict[str, float]:
             "min_rr": 1.8,
             "min_stop_abs": 1.0,
             "min_tp1_pct": 2.5,
-            "min_tp2_pct": 5.0,
-            "watch_min_rr": 1.35,
+            "min_tp2_pct": 4.5,
+            "watch_min_rr": 1.25,
             "watch_min_stop_abs": 0.8,
             "watch_min_tp1_pct": 1.8,
-            "watch_min_tp2_pct": 3.6,
+            "watch_min_tp2_pct": 3.3,
         }
     return {
         "min_rr": 1.6,
@@ -194,6 +194,33 @@ def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_
 
 
 
+def _near_threshold_ratio(value: float, minimum: float, floor_ratio: float) -> bool:
+    if minimum <= 0:
+        return True
+    return value >= minimum * floor_ratio
+
+
+def _main_watchlist_near_miss(
+    stop_loss_pct: float, tp1_pct: float, tp2_pct: float, rr_tp2: float, thresholds: dict[str, float]
+) -> bool:
+    checks = [
+        abs(stop_loss_pct) >= thresholds["watch_min_stop_abs"],
+        tp1_pct >= thresholds["watch_min_tp1_pct"],
+        tp2_pct >= thresholds["watch_min_tp2_pct"],
+        rr_tp2 >= thresholds["watch_min_rr"],
+    ]
+    if sum(checks) >= 3:
+        return True
+
+    close_checks = [
+        _near_threshold_ratio(abs(stop_loss_pct), thresholds["watch_min_stop_abs"], 0.85),
+        _near_threshold_ratio(tp1_pct, thresholds["watch_min_tp1_pct"], 0.85),
+        _near_threshold_ratio(tp2_pct, thresholds["watch_min_tp2_pct"], 0.85),
+        _near_threshold_ratio(rr_tp2, thresholds["watch_min_rr"], 0.9),
+    ]
+    return sum(close_checks) >= 3
+
+
 def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str, list[str]]:
     reasons: list[str] = []
     metrics = signal.metrics
@@ -307,11 +334,19 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
         near_miss_score += 1
 
     watch_reason_count = len(watch_reasons)
-    if near_miss_score >= 3 and watch_reason_count <= 2 and soft_reason_count <= 4:
-        return "watchlist", reasons + watch_reasons
-    if not watch_reasons and soft_reason_count <= 3:
-        return "watchlist", reasons
-    return "reject", reasons + watch_reasons
+    combined_reasons = reasons + watch_reasons
+
+    if mode == "main":
+        if _main_watchlist_near_miss(stop_loss_pct, tp1_pct, tp2_pct, rr_tp2, thresholds) and watch_reason_count <= 3 and soft_reason_count <= 5:
+            return "watchlist", combined_reasons
+        if not watch_reasons and soft_reason_count <= 4:
+            return "watchlist", reasons
+    else:
+        if near_miss_score >= 3 and watch_reason_count <= 2 and soft_reason_count <= 4:
+            return "watchlist", combined_reasons
+        if not watch_reasons and soft_reason_count <= 3:
+            return "watchlist", reasons
+    return "reject", combined_reasons
 
 
 
@@ -674,7 +709,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.7"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.8"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
