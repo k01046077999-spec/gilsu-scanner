@@ -4,25 +4,24 @@ import numpy as np
 import pandas as pd
 
 
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
+def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
-    up = delta.clip(lower=0.0)
-    down = -delta.clip(upper=0.0)
-    gain = up.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    loss = down.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    out = 100 - (100 / (1 + rs))
-    return out.fillna(method='bfill')
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(method="bfill")
 
 
-def enrich(df: pd.DataFrame, rsi_period: int, ema_fast: int, ema_slow: int, ema_regime: int) -> pd.DataFrame:
+def enrich_indicators(df: pd.DataFrame, rsi_period: int = 14) -> pd.DataFrame:
     out = df.copy()
-    out['rsi'] = rsi(out['close'], rsi_period)
-    out['ema20'] = out['close'].ewm(span=ema_fast, adjust=False).mean()
-    out['ema50'] = out['close'].ewm(span=ema_slow, adjust=False).mean()
-    out['ema200'] = out['close'].ewm(span=ema_regime, adjust=False).mean()
-    out['vol_ma_5'] = out['quote_volume'].rolling(5).mean()
-    out['vol_ma_20'] = out['quote_volume'].rolling(20).mean()
-    rolling_low = out['low'].rolling(20).min()
-    out['pct_from_20_low'] = (out['close'] / rolling_low - 1.0) * 100.0
+    out["rsi"] = compute_rsi(out["close"], rsi_period)
+    out["vol_ma_5"] = out["volume"].rolling(5).mean()
+    out["vol_ma_20"] = out["volume"].rolling(20).mean()
+    out["pct_from_20_low"] = (out["close"] / out["low"].rolling(20).min() - 1.0) * 100
+    out["ret_12"] = out["close"].pct_change(12) * 100
     return out
