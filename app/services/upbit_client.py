@@ -30,7 +30,7 @@ async def get_client() -> httpx.AsyncClient:
     global _client
     async with _client_lock:
         if _client is None:
-            _client = httpx.AsyncClient(timeout=settings.request_timeout, headers={"User-Agent": "gilsu-scanner/0.7"})
+            _client = httpx.AsyncClient(timeout=settings.request_timeout, headers={"User-Agent": "gilsu-scanner/0.7.6"})
         return _client
 
 

@@ -25,24 +25,24 @@ class ScanError(Exception):
 def _practical_thresholds(mode: Mode) -> dict[str, float]:
     if mode == "main":
         return {
-            "min_rr": 2.0,
-            "min_stop_abs": 1.2,
-            "min_tp1_pct": 3.0,
-            "min_tp2_pct": 6.0,
-            "watch_min_rr": 1.8,
-            "watch_min_stop_abs": 1.0,
-            "watch_min_tp1_pct": 2.5,
-            "watch_min_tp2_pct": 5.0,
+            "min_rr": 1.8,
+            "min_stop_abs": 1.0,
+            "min_tp1_pct": 2.5,
+            "min_tp2_pct": 5.0,
+            "watch_min_rr": 1.5,
+            "watch_min_stop_abs": 0.8,
+            "watch_min_tp1_pct": 2.0,
+            "watch_min_tp2_pct": 4.0,
         }
     return {
-        "min_rr": 1.8,
-        "min_stop_abs": 1.0,
-        "min_tp1_pct": 2.5,
-        "min_tp2_pct": 5.0,
-        "watch_min_rr": 1.6,
-        "watch_min_stop_abs": 0.8,
-        "watch_min_tp1_pct": 2.2,
-        "watch_min_tp2_pct": 4.5,
+        "min_rr": 1.6,
+        "min_stop_abs": 0.8,
+        "min_tp1_pct": 2.0,
+        "min_tp2_pct": 4.0,
+        "watch_min_rr": 1.35,
+        "watch_min_stop_abs": 0.65,
+        "watch_min_tp1_pct": 1.6,
+        "watch_min_tp2_pct": 3.2,
     }
 
 
@@ -199,7 +199,7 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
     metrics = signal.metrics
     risk = metrics.get("risk_management", {})
     fib = metrics.get("fib", {})
-    current = metrics.get("current_price")
+    current = fib_current = metrics.get("current_price")
     fib_0382 = fib.get("0.382")
     fib_05 = fib.get("0.5")
     fib_0618 = fib.get("0.618")
@@ -207,20 +207,26 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
     if current is None or fib_05 is None:
         reasons.append("fib/current_price_missing")
     elif mode == "main":
-        if signal.side == "bullish" and current > fib_05:
-            reasons.append("late_entry_above_fib_0.5")
-        elif signal.side == "bearish" and current < fib_05:
-            reasons.append("late_entry_below_fib_0.5")
+        if signal.side == "bullish":
+            if fib_0382 is not None and current > fib_0382 * 1.02:
+                reasons.append("late_entry_far_above_fib_0.382")
+            elif current > fib_05:
+                reasons.append("late_entry_above_fib_0.5")
+        elif signal.side == "bearish":
+            if fib_0382 is not None and current < fib_0382 * 0.98:
+                reasons.append("late_entry_far_below_fib_0.382")
+            elif current < fib_05:
+                reasons.append("late_entry_below_fib_0.5")
     else:
         if fib_0382 is not None:
-            if signal.side == "bullish" and current > fib_0382:
-                reasons.append("late_entry_above_fib_0.382")
-            elif signal.side == "bearish" and current < fib_0382:
-                reasons.append("late_entry_below_fib_0.382")
+            if signal.side == "bullish" and current > fib_0382 * 1.03:
+                reasons.append("late_entry_far_above_fib_0.382")
+            elif signal.side == "bearish" and current < fib_0382 * 0.97:
+                reasons.append("late_entry_far_below_fib_0.382")
         elif fib_0618 is not None:
-            if signal.side == "bullish" and current > fib_0618 * 1.02:
+            if signal.side == "bullish" and current > fib_0618 * 1.04:
                 reasons.append("late_entry_far_above_fib_0.618")
-            elif signal.side == "bearish" and current < fib_0618 * 0.98:
+            elif signal.side == "bearish" and current < fib_0618 * 0.96:
                 reasons.append("late_entry_far_below_fib_0.618")
 
     if not risk.get("valid", False):
@@ -262,7 +268,7 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
         return "pass", []
 
     hard_reject_prefixes = (
-        "late_entry",
+        "late_entry_far",
         "invalid_tp_structure",
         "invalid_pct_structure",
         "fib/current_price_missing",
@@ -285,7 +291,12 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
     if rr_tp2 < thresholds["watch_min_rr"]:
         watch_reasons.append("rr_too_low_even_for_watchlist")
 
-    if not watch_reasons and len(reasons) <= 2:
+    soft_reason_count = sum(
+        1 for reason in reasons
+        if not reason.startswith(("late_entry_far", "invalid_", "fib/", "risk_management_", "non_bullish_", "stop_not_", "tp_order_", "pct_order_"))
+    )
+
+    if not watch_reasons and soft_reason_count <= 3:
         return "watchlist", reasons
     return "reject", reasons + watch_reasons
 
@@ -509,15 +520,20 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
     higher = bull_4h if chosen_side == "bullish" else bear_4h
 
     if mode == "main":
-        structural_ok = primary.get("chain") and fib.get("in_zone") and not fib.get("invalidated")
+        structural_ok = (
+            (primary.get("chain") and (fib.get("in_zone") or fib.get("near_zone")))
+            or (primary.get("general") and fib.get("in_zone") and (lower.get("found") or higher.get("found")))
+            or (primary.get("general") and lower.get("chain") and fib.get("near_zone"))
+        ) and not fib.get("invalidated")
         grade = "main" if structural_ok and score >= settings.main_threshold else "reject"
     else:
         structural_ok = (
             primary.get("chain")
             or (primary.get("general") and (lower.get("found") or higher.get("found")))
             or (primary.get("general") and fib.get("near_zone"))
-        )
-        grade = "sub" if structural_ok and score >= settings.sub_threshold and not fib.get("invalidated") else "reject"
+            or (lower.get("chain") and fib.get("near_zone"))
+        ) and not fib.get("invalidated")
+        grade = "sub" if structural_ok and score >= settings.sub_threshold else "reject"
 
     # 업비트 현물용 롱 전용 강제 필터
     if chosen_side != "bullish":
@@ -525,6 +541,18 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
 
     entry_zone = [round(x, 6) for x in fib.get("entry_zone", [])] if fib.get("entry_zone") else None
     risk_management = _calc_risk_management(current_price, fib, chosen_side, df_1h)
+
+    structural_reasons = []
+    if not primary.get("found"):
+        structural_reasons.append("primary_divergence_not_found")
+    if mode == "main" and not (fib.get("in_zone") or fib.get("near_zone")):
+        structural_reasons.append("fib_zone_not_reached")
+    if mode == "sub" and not (fib.get("in_zone") or fib.get("near_zone") or lower.get("found") or higher.get("found")):
+        structural_reasons.append("supporting_confirmation_missing")
+    if fib.get("invalidated"):
+        structural_reasons.append("fib_invalidated")
+    if score < (settings.main_threshold if mode == "main" else settings.sub_threshold):
+        structural_reasons.append("score_below_threshold")
 
     metrics = {
         "bull_score": round(bull_score, 2),
@@ -554,6 +582,7 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
             **risk_management,
             "display_order": ["stop_loss_pct", "tp1_pct", "tp2_pct", "stop_loss", "tp1", "tp2"],
         },
+        "structural_reasons": structural_reasons,
     }
 
     signal = SignalResponse(
@@ -624,7 +653,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.5"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.6"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -667,13 +696,19 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
 
     sem = asyncio.Semaphore(settings.scan_concurrency)
     failures: list[str] = []
+    analyze_failure_reasons: dict[str, int] = {}
 
     async def guarded_analyze(symbol: str):
         async with sem:
             try:
                 return await analyze_symbol(symbol, mode=mode)
-            except Exception:
+            except Exception as exc:
                 failures.append(symbol)
+                key = exc.__class__.__name__
+                msg = str(exc).strip()
+                if msg:
+                    key = f"{key}:{msg[:80]}"
+                analyze_failure_reasons[key] = analyze_failure_reasons.get(key, 0) + 1
                 return None
 
     results = await asyncio.gather(*[guarded_analyze(sym) for sym in candidates])
@@ -683,23 +718,50 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         if (mode == "main" and r.metrics.get("structural_grade") == "main")
         or (mode == "sub" and r.metrics.get("structural_grade") == "sub")
     ]
+    near_miss_watchlist = [
+        r for r in clean
+        if r not in structural_candidates
+        and r.side == "bullish"
+        and r.score >= ((settings.main_threshold - 6.0) if mode == "main" else (settings.sub_threshold - 4.0))
+        and not r.metrics.get("fib", {}).get("invalidated")
+        and (r.metrics.get("primary_divergence", {}).get("found") or r.metrics.get("lower_timeframe_confirmation", {}).get("found"))
+        and (r.metrics.get("fib", {}).get("in_zone") or r.metrics.get("fib", {}).get("near_zone"))
+    ]
     final_results = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "pass"]
     watchlist = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "watchlist"]
+    for r in near_miss_watchlist:
+        if r not in watchlist:
+            r.metrics["watchlist_candidate"] = True
+            r.metrics["watchlist_tier"] = "C"
+            r.metrics["watchlist_reason"] = "구조 근접 신호"
+            watchlist.append(r)
     rejected_after_structure = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "reject"]
 
     final_results.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
     watchlist.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
 
     top_picks = _build_top_picks(final_results, mode)
+    structural_reason_counts: dict[str, int] = {}
+    practical_reason_counts: dict[str, int] = {}
+    for r in clean:
+        for reason in r.metrics.get("structural_reasons", []):
+            structural_reason_counts[reason] = structural_reason_counts.get(reason, 0) + 1
+        for reason in r.metrics.get("practical_filter_reasons", []):
+            practical_reason_counts[reason] = practical_reason_counts.get(reason, 0) + 1
+
     diagnostics.update({
         "scanned_count": len(candidates),
         "analyzed_count": len(clean),
         "analyze_failed_count": len(failures),
+        "analyze_failure_reasons": analyze_failure_reasons,
         "structural_candidate_count": len(structural_candidates),
+        "near_miss_watchlist_count": len(near_miss_watchlist),
         "practical_pass_count": len(final_results),
         "watchlist_count": len(watchlist),
         "practical_reject_count": len(rejected_after_structure),
         "fully_rejected_count": len(clean) - len(structural_candidates),
+        "structural_reason_counts": structural_reason_counts,
+        "practical_reason_counts": practical_reason_counts,
         "final_result_count": len(final_results),
         "failed_symbols": failures[:20],
         "duration_ms": int((perf_counter() - start) * 1000),
