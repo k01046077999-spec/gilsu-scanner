@@ -20,14 +20,14 @@ class Settings(BaseModel):
     prefilter_limit: int = 180
     rsi_period: int = 14
     swing_window: int = 2
-    max_symbols_per_scan: int = 80
-    universe_size: int = 140
-    prefilter_size: int = 70
+    max_symbols_per_scan: int = 90
+    universe_size: int = 160
+    prefilter_size: int = 80
     scan_concurrency: int = 5
     request_timeout: float = 20.0
     top_pick_count: int = 3
-    main_threshold: float = 56.0
-    sub_threshold: float = 32.0
+    main_threshold: float = 52.0
+    sub_threshold: float = 30.0
 
 
 settings = Settings()

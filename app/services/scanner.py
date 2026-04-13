@@ -29,20 +29,20 @@ def _practical_thresholds(mode: Mode) -> dict[str, float]:
             "min_stop_abs": 1.0,
             "min_tp1_pct": 2.5,
             "min_tp2_pct": 5.0,
-            "watch_min_rr": 1.5,
+            "watch_min_rr": 1.35,
             "watch_min_stop_abs": 0.8,
-            "watch_min_tp1_pct": 2.0,
-            "watch_min_tp2_pct": 4.0,
+            "watch_min_tp1_pct": 1.8,
+            "watch_min_tp2_pct": 3.6,
         }
     return {
         "min_rr": 1.6,
         "min_stop_abs": 0.8,
         "min_tp1_pct": 2.0,
         "min_tp2_pct": 4.0,
-        "watch_min_rr": 1.35,
+        "watch_min_rr": 1.25,
         "watch_min_stop_abs": 0.65,
-        "watch_min_tp1_pct": 1.6,
-        "watch_min_tp2_pct": 3.2,
+        "watch_min_tp1_pct": 1.4,
+        "watch_min_tp2_pct": 2.8,
     }
 
 
@@ -296,6 +296,19 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
         if not reason.startswith(("late_entry_far", "invalid_", "fib/", "risk_management_", "non_bullish_", "stop_not_", "tp_order_", "pct_order_"))
     )
 
+    near_miss_score = 0
+    if abs(stop_loss_pct) >= thresholds["watch_min_stop_abs"]:
+        near_miss_score += 1
+    if tp1_pct >= thresholds["watch_min_tp1_pct"]:
+        near_miss_score += 1
+    if tp2_pct >= thresholds["watch_min_tp2_pct"]:
+        near_miss_score += 1
+    if rr_tp2 >= thresholds["watch_min_rr"]:
+        near_miss_score += 1
+
+    watch_reason_count = len(watch_reasons)
+    if near_miss_score >= 3 and watch_reason_count <= 2 and soft_reason_count <= 4:
+        return "watchlist", reasons + watch_reasons
     if not watch_reasons and soft_reason_count <= 3:
         return "watchlist", reasons
     return "reject", reasons + watch_reasons
@@ -520,10 +533,14 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
     higher = bull_4h if chosen_side == "bullish" else bear_4h
 
     if mode == "main":
+        primary_ready = primary.get("chain") or (primary.get("general") and (lower.get("found") or higher.get("found")))
+        secondary_stack = lower.get("chain") and (fib.get("in_zone") or fib.get("near_zone") or higher.get("found"))
+        tertiary_stack = lower.get("general") and higher.get("found") and (fib.get("in_zone") or fib.get("near_zone"))
         structural_ok = (
-            (primary.get("chain") and (fib.get("in_zone") or fib.get("near_zone")))
-            or (primary.get("general") and fib.get("in_zone") and (lower.get("found") or higher.get("found")))
-            or (primary.get("general") and lower.get("chain") and fib.get("near_zone"))
+            (primary_ready and (fib.get("in_zone") or fib.get("near_zone")))
+            or (primary.get("general") and fib.get("in_zone"))
+            or secondary_stack
+            or tertiary_stack
         ) and not fib.get("invalidated")
         grade = "main" if structural_ok and score >= settings.main_threshold else "reject"
     else:
@@ -532,6 +549,7 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
             or (primary.get("general") and (lower.get("found") or higher.get("found")))
             or (primary.get("general") and fib.get("near_zone"))
             or (lower.get("chain") and fib.get("near_zone"))
+            or (lower.get("general") and higher.get("found") and (fib.get("in_zone") or fib.get("near_zone")))
         ) and not fib.get("invalidated")
         grade = "sub" if structural_ok and score >= settings.sub_threshold else "reject"
 
@@ -544,7 +562,10 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
 
     structural_reasons = []
     if not primary.get("found"):
-        structural_reasons.append("primary_divergence_not_found")
+        if lower.get("found") or higher.get("found"):
+            structural_reasons.append("primary_divergence_weak_secondary_confirmation")
+        else:
+            structural_reasons.append("primary_divergence_not_found")
     if mode == "main" and not (fib.get("in_zone") or fib.get("near_zone")):
         structural_reasons.append("fib_zone_not_reached")
     if mode == "sub" and not (fib.get("in_zone") or fib.get("near_zone") or lower.get("found") or higher.get("found")):
@@ -653,7 +674,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.6"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.7"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -722,9 +743,13 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         r for r in clean
         if r not in structural_candidates
         and r.side == "bullish"
-        and r.score >= ((settings.main_threshold - 6.0) if mode == "main" else (settings.sub_threshold - 4.0))
+        and r.score >= ((settings.main_threshold - 8.0) if mode == "main" else (settings.sub_threshold - 6.0))
         and not r.metrics.get("fib", {}).get("invalidated")
-        and (r.metrics.get("primary_divergence", {}).get("found") or r.metrics.get("lower_timeframe_confirmation", {}).get("found"))
+        and (
+            r.metrics.get("primary_divergence", {}).get("found")
+            or r.metrics.get("lower_timeframe_confirmation", {}).get("found")
+            or r.metrics.get("higher_timeframe_confirmation", {}).get("found")
+        )
         and (r.metrics.get("fib", {}).get("in_zone") or r.metrics.get("fib", {}).get("near_zone"))
     ]
     final_results = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "pass"]
