@@ -9,7 +9,7 @@ from app.services.scanner import analyze_symbol, scan_symbols
 
 app = FastAPI(
     title="길수매매법 코인 검색기",
-    version="0.7.4",
+    version="0.7.5",
     description="업비트 KRW 마켓 전용 1시간봉 중심 RSI 다이버전스 연계 + Fib 기반 메인/서브 코인 검색기",
 )
 
@@ -28,14 +28,14 @@ async def shutdown_event():
 async def root():
     return {
         "service": "gilsu-scanner",
-        "version": "0.7.4",
+        "version": "0.7.5",
         "endpoints": ["/health", "/ready", "/scan/main", "/scan/sub", "/scan/symbol/{symbol}"],
     }
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "gilsu-scanner", "version": "0.7.4"}
+    return {"status": "ok", "service": "gilsu-scanner", "version": "0.7.5"}
 
 
 @app.get("/ready")
@@ -44,7 +44,7 @@ async def ready():
     return {
         "status": "ready",
         "service": "gilsu-scanner",
-        "version": "0.7.4",
+        "version": "0.7.5",
         "universe_size": settings.universe_size,
         "prefilter_size": settings.prefilter_size,
         "scan_concurrency": settings.scan_concurrency,
@@ -56,8 +56,8 @@ async def scan_main(symbols: str | None = Query(default=None, description="comma
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     if symbol_list is not None and not symbol_list:
         symbol_list = settings.default_symbols
-    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="main")
-    return ScanResponse(mode="main", count=len(results), results=results, top_picks=top_picks, diagnostics=diagnostics)
+    results, watchlist, diagnostics, top_picks = await scan_symbols(symbol_list, mode="main")
+    return ScanResponse(mode="main", count=len(results), results=results, watchlist=watchlist, top_picks=top_picks, diagnostics=diagnostics)
 
 
 @app.get("/scan/sub", response_model=ScanResponse)
@@ -65,8 +65,8 @@ async def scan_sub(symbols: str | None = Query(default=None, description="comma 
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     if symbol_list is not None and not symbol_list:
         symbol_list = settings.default_symbols
-    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
-    return ScanResponse(mode="sub", count=len(results), results=results, top_picks=top_picks, diagnostics=diagnostics)
+    results, watchlist, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
+    return ScanResponse(mode="sub", count=len(results), results=results, watchlist=watchlist, top_picks=top_picks, diagnostics=diagnostics)
 
 
 
@@ -76,7 +76,7 @@ async def scan_sub_top(symbols: str | None = Query(default=None, description="co
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
     if symbol_list is not None and not symbol_list:
         symbol_list = settings.default_symbols
-    results, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
+    results, watchlist, diagnostics, top_picks = await scan_symbols(symbol_list, mode="sub")
     compact_results = [
         {
             "symbol": p.symbol,

@@ -22,6 +22,30 @@ class ScanError(Exception):
     pass
 
 
+def _practical_thresholds(mode: Mode) -> dict[str, float]:
+    if mode == "main":
+        return {
+            "min_rr": 2.0,
+            "min_stop_abs": 1.2,
+            "min_tp1_pct": 3.0,
+            "min_tp2_pct": 6.0,
+            "watch_min_rr": 1.8,
+            "watch_min_stop_abs": 1.0,
+            "watch_min_tp1_pct": 2.5,
+            "watch_min_tp2_pct": 5.0,
+        }
+    return {
+        "min_rr": 1.8,
+        "min_stop_abs": 1.0,
+        "min_tp1_pct": 2.5,
+        "min_tp2_pct": 5.0,
+        "watch_min_rr": 1.6,
+        "watch_min_stop_abs": 0.8,
+        "watch_min_tp1_pct": 2.2,
+        "watch_min_tp2_pct": 4.5,
+    }
+
+
 
 def _volume_ok(df) -> bool:
     row = df.iloc[-1]
@@ -170,7 +194,7 @@ def _calc_risk_management(current_price: float, fib: dict, chosen_side: str, df_
 
 
 
-def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, list[str]]:
+def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str, list[str]]:
     reasons: list[str] = []
     metrics = signal.metrics
     risk = metrics.get("risk_management", {})
@@ -201,7 +225,7 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
 
     if not risk.get("valid", False):
         reasons.append(risk.get("invalid_reason") or "risk_management_invalid")
-        return False, reasons
+        return "reject", reasons
 
     entry_reference = risk.get("entry_reference")
     stop_loss = risk.get("stop_loss")
@@ -210,6 +234,7 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
     stop_loss_pct = float(risk.get("stop_loss_pct") or 0.0)
     tp1_pct = float(risk.get("tp1_pct") or 0.0)
     tp2_pct = float(risk.get("tp2_pct") or 0.0)
+    rr_tp2 = float(risk.get("rr_tp2") or 0.0)
 
     if signal.side == "bullish":
         if not (stop_loss < entry_reference < tp1 < tp2):
@@ -222,30 +247,47 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
         if not (stop_loss_pct < 0 < tp1_pct < tp2_pct):
             reasons.append("invalid_pct_structure")
 
-    if mode == "main":
-        min_rr = 2.0
-        min_stop_abs = 1.2
-        min_tp1_pct = 3.0
-        min_tp2_pct = 6.0
-    else:
-        min_rr = 1.8
-        min_stop_abs = 1.0
-        min_tp1_pct = 2.5
-        min_tp2_pct = 5.0
+    thresholds = _practical_thresholds(mode)
 
-    if abs(stop_loss_pct) < min_stop_abs:
-        reasons.append(f"stop_loss_pct_below_{min_stop_abs}")
+    if abs(stop_loss_pct) < thresholds["min_stop_abs"]:
+        reasons.append(f"stop_loss_pct_below_{thresholds['min_stop_abs']}")
+    if tp1_pct < thresholds["min_tp1_pct"]:
+        reasons.append(f"tp1_pct_below_{thresholds['min_tp1_pct']}")
+    if tp2_pct < thresholds["min_tp2_pct"]:
+        reasons.append(f"tp2_pct_below_{thresholds['min_tp2_pct']}")
+    if rr_tp2 < thresholds["min_rr"]:
+        reasons.append(f"rr_tp2_below_{thresholds['min_rr']}")
 
-    if tp1_pct < min_tp1_pct:
-        reasons.append(f"tp1_pct_below_{min_tp1_pct}")
+    if not reasons:
+        return "pass", []
 
-    if tp2_pct < min_tp2_pct:
-        reasons.append(f"tp2_pct_below_{min_tp2_pct}")
+    hard_reject_prefixes = (
+        "late_entry",
+        "invalid_tp_structure",
+        "invalid_pct_structure",
+        "fib/current_price_missing",
+        "risk_management_invalid",
+        "non_bullish_filtered",
+        "stop_not_",
+        "tp_order_invalid",
+        "pct_order_invalid",
+    )
+    if any(reason.startswith(hard_reject_prefixes) for reason in reasons):
+        return "reject", reasons
 
-    if float(risk.get("rr_tp2") or 0.0) < min_rr:
-        reasons.append(f"rr_tp2_below_{min_rr}")
+    watch_reasons: list[str] = []
+    if abs(stop_loss_pct) < thresholds["watch_min_stop_abs"]:
+        watch_reasons.append("stop_loss_too_tight_even_for_watchlist")
+    if tp1_pct < thresholds["watch_min_tp1_pct"]:
+        watch_reasons.append("tp1_too_small_even_for_watchlist")
+    if tp2_pct < thresholds["watch_min_tp2_pct"]:
+        watch_reasons.append("tp2_too_small_even_for_watchlist")
+    if rr_tp2 < thresholds["watch_min_rr"]:
+        watch_reasons.append("rr_too_low_even_for_watchlist")
 
-    return len(reasons) == 0, reasons
+    if not watch_reasons and len(reasons) <= 2:
+        return "watchlist", reasons
+    return "reject", reasons + watch_reasons
 
 
 
@@ -311,9 +353,10 @@ def _build_top_picks(results: list[SignalResponse], mode: Mode) -> list[TopPick]
         rr = float(risk.get("rr_tp2") or 0.0)
         tp2_pct = float(risk.get("tp2_pct") or 0.0)
         stop_loss_pct = abs(float(risk.get("stop_loss_pct") or 0.0))
-        min_rr = 2.0 if mode == "main" else 1.8
-        min_tp2_pct = 6.0 if mode == "main" else 5.0
-        min_stop_abs = 1.2 if mode == "main" else 1.0
+        thresholds = _practical_thresholds(mode)
+        min_rr = thresholds["min_rr"]
+        min_tp2_pct = thresholds["min_tp2_pct"]
+        min_stop_abs = thresholds["min_stop_abs"]
         if rr < min_rr or tp2_pct < min_tp2_pct or stop_loss_pct < min_stop_abs:
             continue
         rank_score, rr, volume_ratio, tp2_pct = rank_components(signal)
@@ -531,16 +574,24 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
         reasons=reasons,
         metrics=metrics,
     )
-    passed, filter_reasons = _passes_practical_filter(signal, mode)
+    structural_grade = signal.grade
+    practical_status, filter_reasons = _classify_practical_filter(signal, mode)
     if chosen_side != "bullish":
-        passed = False
+        practical_status = "reject"
         filter_reasons = list(filter_reasons) + ["non_bullish_filtered"]
 
-    signal.metrics["practical_filter_passed"] = passed
+    signal.metrics["structural_grade"] = structural_grade
+    signal.metrics["practical_filter_status"] = practical_status
+    signal.metrics["practical_filter_passed"] = practical_status == "pass"
     signal.metrics["practical_filter_reasons"] = filter_reasons
+    signal.metrics["watchlist_candidate"] = practical_status == "watchlist"
     if filter_reasons:
         signal.metrics["invalid_reason"] = filter_reasons[0]
-    if not passed:
+    if practical_status == "watchlist":
+        signal.metrics["watchlist_tier"] = "B"
+        signal.metrics["watchlist_reason"] = "실전 기준 근접 미달"
+        signal.grade = "reject"
+    elif practical_status != "pass":
         signal.grade = "reject"
     return signal
 
@@ -571,9 +622,9 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
     }
 
 
-async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
+async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.4"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.5"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -585,12 +636,33 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
 
     candidates, pre = await _prefilter_candidates(universe, mode)
     diagnostics.update(pre)
+    main_thresholds = _practical_thresholds("main")
+    sub_thresholds = _practical_thresholds("sub")
     diagnostics["practical_thresholds"] = {
         "market": "upbit_krw",
         "side": "bullish_only",
         "display": "percent_first",
-        "main": {"min_stop_abs_pct": 1.2, "min_tp1_pct": 3.0, "min_tp2_pct": 6.0, "min_rr_tp2": 2.0},
-        "sub": {"min_stop_abs_pct": 1.0, "min_tp1_pct": 2.5, "min_tp2_pct": 5.0, "min_rr_tp2": 1.8},
+        "watchlist_enabled": True,
+        "main": {
+            "min_stop_abs_pct": main_thresholds["min_stop_abs"],
+            "min_tp1_pct": main_thresholds["min_tp1_pct"],
+            "min_tp2_pct": main_thresholds["min_tp2_pct"],
+            "min_rr_tp2": main_thresholds["min_rr"],
+            "watch_min_stop_abs_pct": main_thresholds["watch_min_stop_abs"],
+            "watch_min_tp1_pct": main_thresholds["watch_min_tp1_pct"],
+            "watch_min_tp2_pct": main_thresholds["watch_min_tp2_pct"],
+            "watch_min_rr_tp2": main_thresholds["watch_min_rr"],
+        },
+        "sub": {
+            "min_stop_abs_pct": sub_thresholds["min_stop_abs"],
+            "min_tp1_pct": sub_thresholds["min_tp1_pct"],
+            "min_tp2_pct": sub_thresholds["min_tp2_pct"],
+            "min_rr_tp2": sub_thresholds["min_rr"],
+            "watch_min_stop_abs_pct": sub_thresholds["watch_min_stop_abs"],
+            "watch_min_tp1_pct": sub_thresholds["watch_min_tp1_pct"],
+            "watch_min_tp2_pct": sub_thresholds["watch_min_tp2_pct"],
+            "watch_min_rr_tp2": sub_thresholds["watch_min_rr"],
+        },
     }
 
     sem = asyncio.Semaphore(settings.scan_concurrency)
@@ -606,20 +678,31 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
 
     results = await asyncio.gather(*[guarded_analyze(sym) for sym in candidates])
     clean = [r for r in results if r is not None]
-    filtered = [
+    structural_candidates = [
         r for r in clean
-        if (mode == "main" and r.grade == "main") or (mode == "sub" and r.grade == "sub")
+        if (mode == "main" and r.metrics.get("structural_grade") == "main")
+        or (mode == "sub" and r.metrics.get("structural_grade") == "sub")
     ]
-    filtered.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
+    final_results = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "pass"]
+    watchlist = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "watchlist"]
+    rejected_after_structure = [r for r in structural_candidates if r.metrics.get("practical_filter_status") == "reject"]
 
-    top_picks = _build_top_picks(filtered, mode)
+    final_results.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
+    watchlist.sort(key=lambda x: (x.metrics.get("risk_management", {}).get("rr_tp2", 0), x.score), reverse=True)
+
+    top_picks = _build_top_picks(final_results, mode)
     diagnostics.update({
         "scanned_count": len(candidates),
-        "success_count": len(clean),
-        "failed_count": len(failures),
-        "filtered_count": len(clean) - len(filtered),
+        "analyzed_count": len(clean),
+        "analyze_failed_count": len(failures),
+        "structural_candidate_count": len(structural_candidates),
+        "practical_pass_count": len(final_results),
+        "watchlist_count": len(watchlist),
+        "practical_reject_count": len(rejected_after_structure),
+        "fully_rejected_count": len(clean) - len(structural_candidates),
+        "final_result_count": len(final_results),
         "failed_symbols": failures[:20],
         "duration_ms": int((perf_counter() - start) * 1000),
         "top_pick_count": len(top_picks),
     })
-    return filtered, diagnostics, top_picks
+    return final_results, watchlist, diagnostics, top_picks

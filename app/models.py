@@ -48,6 +48,7 @@ class ScanResponse(BaseModel):
     mode: Mode
     count: int
     results: list[SignalResponse]
+    watchlist: list[SignalResponse] = Field(default_factory=list)
     top_picks: list[TopPick] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 
