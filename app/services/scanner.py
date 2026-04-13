@@ -207,9 +207,9 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
     stop_loss = risk.get("stop_loss")
     tp1 = risk.get("tp1")
     tp2 = risk.get("tp2")
-    stop_loss_pct = risk.get("stop_loss_pct")
-    tp1_pct = risk.get("tp1_pct")
-    tp2_pct = risk.get("tp2_pct")
+    stop_loss_pct = float(risk.get("stop_loss_pct") or 0.0)
+    tp1_pct = float(risk.get("tp1_pct") or 0.0)
+    tp2_pct = float(risk.get("tp2_pct") or 0.0)
 
     if signal.side == "bullish":
         if not (stop_loss < entry_reference < tp1 < tp2):
@@ -222,13 +222,28 @@ def _passes_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[bool, 
         if not (stop_loss_pct < 0 < tp1_pct < tp2_pct):
             reasons.append("invalid_pct_structure")
 
-    min_rr = 1.25 if mode == "main" else 0.8
-    if risk.get("rr_tp2", 0) < min_rr:
-        reasons.append(f"rr_tp2_below_{min_rr}")
+    if mode == "main":
+        min_rr = 2.0
+        min_stop_abs = 1.2
+        min_tp1_pct = 3.0
+        min_tp2_pct = 6.0
+    else:
+        min_rr = 1.8
+        min_stop_abs = 1.0
+        min_tp1_pct = 2.5
+        min_tp2_pct = 5.0
 
-    min_tp1_pct = 1.0 if mode == "main" else 0.6
-    if (risk.get("tp1_pct") or 0) < min_tp1_pct:
+    if abs(stop_loss_pct) < min_stop_abs:
+        reasons.append(f"stop_loss_pct_below_{min_stop_abs}")
+
+    if tp1_pct < min_tp1_pct:
         reasons.append(f"tp1_pct_below_{min_tp1_pct}")
+
+    if tp2_pct < min_tp2_pct:
+        reasons.append(f"tp2_pct_below_{min_tp2_pct}")
+
+    if float(risk.get("rr_tp2") or 0.0) < min_rr:
+        reasons.append(f"rr_tp2_below_{min_rr}")
 
     return len(reasons) == 0, reasons
 
@@ -295,9 +310,11 @@ def _build_top_picks(results: list[SignalResponse], mode: Mode) -> list[TopPick]
         risk = metrics.get("risk_management", {}) or {}
         rr = float(risk.get("rr_tp2") or 0.0)
         tp2_pct = float(risk.get("tp2_pct") or 0.0)
-        min_rr = 1.25 if mode == "main" else 0.8
-        min_tp2_pct = 5.0 if mode == "main" else 2.0
-        if rr < min_rr or tp2_pct < min_tp2_pct:
+        stop_loss_pct = abs(float(risk.get("stop_loss_pct") or 0.0))
+        min_rr = 2.0 if mode == "main" else 1.8
+        min_tp2_pct = 6.0 if mode == "main" else 5.0
+        min_stop_abs = 1.2 if mode == "main" else 1.0
+        if rr < min_rr or tp2_pct < min_tp2_pct or stop_loss_pct < min_stop_abs:
             continue
         rank_score, rr, volume_ratio, tp2_pct = rank_components(signal)
         eligible.append((signal, rank_score, rr, volume_ratio, tp2_pct))
@@ -490,7 +507,10 @@ async def analyze_symbol(symbol: str, mode: Mode = "main") -> SignalResponse:
             "1.272": round(float(fib.get("fib_1272", 0)), 6) if fib.get("fib_1272") else None,
             "1.618": round(float(fib.get("fib_1618", 0)), 6) if fib.get("fib_1618") else None,
         },
-        "risk_management": risk_management,
+        "risk_management": {
+            **risk_management,
+            "display_order": ["stop_loss_pct", "tp1_pct", "tp2_pct", "stop_loss", "tp1", "tp2"],
+        },
     }
 
     signal = SignalResponse(
@@ -553,7 +573,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.7.3"}
+    diagnostics: dict = {"mode": mode, "version": "0.7.4"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -565,6 +585,13 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
 
     candidates, pre = await _prefilter_candidates(universe, mode)
     diagnostics.update(pre)
+    diagnostics["practical_thresholds"] = {
+        "market": "upbit_krw",
+        "side": "bullish_only",
+        "display": "percent_first",
+        "main": {"min_stop_abs_pct": 1.2, "min_tp1_pct": 3.0, "min_tp2_pct": 6.0, "min_rr_tp2": 2.0},
+        "sub": {"min_stop_abs_pct": 1.0, "min_tp1_pct": 2.5, "min_tp2_pct": 5.0, "min_rr_tp2": 1.8},
+    }
 
     sem = asyncio.Semaphore(settings.scan_concurrency)
     failures: list[str] = []

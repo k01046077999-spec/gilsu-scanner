@@ -14,14 +14,14 @@ class SignalResponse(BaseModel):
     side: Side | None = None
     grade: Grade
     score: float = Field(..., description="0~100")
-    entry_zone: list[float] | None = None
-    stop_loss: float | None = None
-    tp1: float | None = None
-    tp2: float | None = None
     current_price: float | None = None
+    entry_zone: list[float] | None = None
     stop_loss_pct: float | None = None
     tp1_pct: float | None = None
     tp2_pct: float | None = None
+    stop_loss: float | None = None
+    tp1: float | None = None
+    tp2: float | None = None
     reasons: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
 
@@ -33,12 +33,11 @@ class TopPick(BaseModel):
     score: float
     rank_score: float
     rr_tp2: float | None = None
-    tp2_pct: float | None = None
-    volume_ratio: float | None = None
     current_price: float | None = None
     stop_loss_pct: float | None = None
     tp1_pct: float | None = None
     tp2_pct: float | None = None
+    volume_ratio: float | None = None
     stop_loss: float | None = None
     tp1: float | None = None
     tp2: float | None = None
