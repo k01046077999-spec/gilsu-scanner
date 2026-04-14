@@ -25,27 +25,58 @@ class ScanError(Exception):
 def _practical_thresholds(mode: Mode) -> dict[str, float]:
     if mode == "main":
         return {
-            "min_rr": 1.8,
-            "min_stop_abs": 1.0,
-            "min_tp1_pct": 2.5,
-            "min_tp2_pct": 4.5,
-            "watch_min_rr": 1.25,
-            "watch_min_stop_abs": 0.8,
-            "watch_min_tp1_pct": 1.8,
-            "watch_min_tp2_pct": 3.3,
+            "min_rr": 2.0,
+            "min_stop_abs": 1.2,
+            "min_tp1_pct": 3.0,
+            "min_tp2_pct": 5.0,
+            "watch_min_rr": 1.45,
+            "watch_min_stop_abs": 1.0,
+            "watch_min_tp1_pct": 2.2,
+            "watch_min_tp2_pct": 4.0,
         }
     return {
-        "min_rr": 1.6,
-        "min_stop_abs": 0.8,
-        "min_tp1_pct": 2.0,
-        "min_tp2_pct": 4.0,
-        "watch_min_rr": 1.25,
-        "watch_min_stop_abs": 0.65,
-        "watch_min_tp1_pct": 1.4,
-        "watch_min_tp2_pct": 2.8,
+        "min_rr": 1.8,
+        "min_stop_abs": 1.0,
+        "min_tp1_pct": 2.4,
+        "min_tp2_pct": 4.5,
+        "watch_min_rr": 1.35,
+        "watch_min_stop_abs": 0.8,
+        "watch_min_tp1_pct": 1.8,
+        "watch_min_tp2_pct": 3.2,
     }
 
 
+
+
+
+def _bullish_entry_confirmation(df) -> dict:
+    if len(df) < 3:
+        return {"confirmed": False, "reasons": ["insufficient_candle_history"], "close_strength": None, "rsi_delta": None, "body_pct": None}
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    candle_range = float(last["high"] - last["low"]) if float(last["high"] - last["low"]) != 0 else 0.0
+    body_pct = ((float(last["close"]) / float(last["open"])) - 1.0) * 100.0 if float(last["open"]) != 0 else 0.0
+    close_strength = ((float(last["close"]) - float(last["low"])) / candle_range) if candle_range > 0 else 0.0
+    rsi_delta = float(last["rsi"] - prev["rsi"])
+
+    reasons = []
+    if float(last["close"]) <= float(prev["close"]):
+        reasons.append("last_close_not_above_prev_close")
+    if body_pct <= 0:
+        reasons.append("last_candle_not_green")
+    if close_strength < 0.55:
+        reasons.append("close_not_near_candle_high")
+    if rsi_delta <= 0:
+        reasons.append("rsi_not_rising")
+
+    return {
+        "confirmed": len(reasons) <= 1,
+        "reasons": reasons,
+        "close_strength": round(close_strength, 2),
+        "rsi_delta": round(rsi_delta, 2),
+        "body_pct": round(body_pct, 2),
+    }
 
 def _volume_ok(df) -> bool:
     row = df.iloc[-1]
@@ -281,6 +312,15 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
             reasons.append("invalid_pct_structure")
 
     thresholds = _practical_thresholds(mode)
+    entry_confirmation = metrics.get("entry_confirmation", {})
+    lower = metrics.get("lower_timeframe_confirmation", {}) or {}
+    higher = metrics.get("higher_timeframe_confirmation", {}) or {}
+
+    if signal.side == "bullish":
+        if not entry_confirmation.get("confirmed", False):
+            reasons.append("entry_confirmation_missing")
+        if not (lower.get("found") or higher.get("found") or lower.get("chain") or higher.get("chain")):
+            reasons.append("multi_timeframe_confirmation_missing")
 
     if abs(stop_loss_pct) < thresholds["min_stop_abs"]:
         reasons.append(f"stop_loss_pct_below_{thresholds['min_stop_abs']}")
@@ -296,6 +336,8 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
 
     hard_reject_prefixes = (
         "late_entry_far",
+        "entry_confirmation_missing",
+        "multi_timeframe_confirmation_missing",
         "invalid_tp_structure",
         "invalid_pct_structure",
         "fib/current_price_missing",
@@ -337,14 +379,14 @@ def _classify_practical_filter(signal: SignalResponse, mode: Mode) -> tuple[str,
     combined_reasons = reasons + watch_reasons
 
     if mode == "main":
-        if _main_watchlist_near_miss(stop_loss_pct, tp1_pct, tp2_pct, rr_tp2, thresholds) and watch_reason_count <= 3 and soft_reason_count <= 5:
+        if _main_watchlist_near_miss(stop_loss_pct, tp1_pct, tp2_pct, rr_tp2, thresholds) and watch_reason_count <= 2 and soft_reason_count <= 3:
             return "watchlist", combined_reasons
-        if not watch_reasons and soft_reason_count <= 4:
+        if not watch_reasons and soft_reason_count <= 2:
             return "watchlist", reasons
     else:
-        if near_miss_score >= 3 and watch_reason_count <= 2 and soft_reason_count <= 4:
+        if near_miss_score >= 3 and watch_reason_count <= 2 and soft_reason_count <= 3:
             return "watchlist", combined_reasons
-        if not watch_reasons and soft_reason_count <= 3:
+        if not watch_reasons and soft_reason_count <= 2:
             return "watchlist", reasons
     return "reject", combined_reasons
 
@@ -725,6 +767,8 @@ async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None, fo
     if score < (settings.main_threshold if mode == "main" else settings.sub_threshold):
         structural_reasons.append("score_below_threshold")
 
+    entry_confirmation = _bullish_entry_confirmation(df_1h) if chosen_side == "bullish" else {"confirmed": True, "reasons": []}
+
     metrics = {
         "bull_score": round(bull_score, 2),
         "bear_score": round(bear_score, 2),
@@ -751,6 +795,7 @@ async def analyze_symbol(symbol: str, mode: Mode = "main", preloaded_1h=None, fo
             "invalidated": bool(fib.get("invalidated")),
         },
         "risk_management": {**risk_management, "display_order": ["stop_loss_pct", "tp1_pct", "tp2_pct", "stop_loss", "tp1", "tp2"]},
+        "entry_confirmation": entry_confirmation,
         "structural_reasons": structural_reasons,
         "pipeline_stage": "full_analysis",
         "quick_rank": snap["bull_rank"],
@@ -815,7 +860,7 @@ async def _prefilter_candidates(symbols: list[str], mode: Mode) -> tuple[list[st
 
 async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") -> tuple[list[SignalResponse], list[SignalResponse], dict, list[TopPick]]:
     start = perf_counter()
-    diagnostics: dict = {"mode": mode, "version": "0.8.1"}
+    diagnostics: dict = {"mode": mode, "version": "0.8.2"}
 
     if symbols:
         universe = symbols[: settings.max_symbols_per_scan]
@@ -834,7 +879,7 @@ async def scan_symbols(symbols: list[str] | None = None, mode: Mode = "main") ->
         "side": "bullish_only",
         "display": "percent_first",
         "watchlist_enabled": True,
-        "stability_patch": "staged_fetch_ranked_v081",
+        "stability_patch": "ranked_gate_plus_confirmation_v082",
         "main": {
             "min_stop_abs_pct": main_thresholds["min_stop_abs"],
             "min_tp1_pct": main_thresholds["min_tp1_pct"],
