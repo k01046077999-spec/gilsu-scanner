@@ -1,20 +1,8 @@
 services:
   - type: web
-    name: nongsa-scanner
+    name: gilsu-scanner
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: DEFAULT_MARKET
-        value: ALL
-      - key: SCAN_LIMIT
-        value: 120
-      - key: MAX_RESULTS
-        value: 30
-      - key: MIN_TRADING_VALUE
-        value: 1500000000
-      - key: CACHE_TTL_SEC
-        value: 900
-      - key: PYKRX_SLEEP_SEC
-        value: 0.03
+    autoDeploy: true

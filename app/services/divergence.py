@@ -1,162 +1,145 @@
 from __future__ import annotations
 
-"""
-제이드 파동 이론 — 다이버전스 감지 모듈
-
-핵심 원칙 (PDF):
-  - 상승 다이버전스: 지수 저점은 낮아지는데 RSI 저점은 올라가는 패턴
-  - 다이버전스 '연계'(chain): 최소 3개 꼭지점이 연속으로 이어질 때
-      → 가장 신뢰도 높은 진입 신호
-  - RSI가 점선(과매도/과매수 구간 경계)을 넘는 자리에서 발생해야 유효
-  - 중간 구간(RSI 40~60 사이)의 다이버전스는 신뢰도 낮음
-
-detect_bullish:  매수(롱) 다이버전스 감지
-detect_bearish:  매도(숏) 다이버전스 감지
-"""
-
 import pandas as pd
 
-# RSI 가 이 임계 이하/이상에서 꼭지를 찍어야 유효한 다이버전스로 간주
-RSI_OVERSOLD_THRESHOLD = 42.0   # 저점 RSI
-RSI_OVERBOUGHT_THRESHOLD = 58.0  # 고점 RSI
+EXTREME_OVERSOLD = 38
+STRONG_OVERSOLD = 33
+EXTREME_OVERBOUGHT = 62
+STRONG_OVERBOUGHT = 67
+MIN_PRICE_MOVE_PCT = 0.2
+MIN_RSI_MOVE = 1.2
+MIN_BAR_GAP = 1
 
 
-def _is_rsi_extreme_low(rsi_val: float) -> bool:
-    return rsi_val <= RSI_OVERSOLD_THRESHOLD
+def _bar_gap_ok(swings: pd.DataFrame) -> bool:
+    if len(swings) < 2:
+        return False
+    idx = list(swings.index)
+    return all((idx[i] - idx[i - 1]) >= MIN_BAR_GAP for i in range(1, len(idx)))
 
 
-def _is_rsi_extreme_high(rsi_val: float) -> bool:
-    return rsi_val >= RSI_OVERBOUGHT_THRESHOLD
+def _pct_change(a: float, b: float) -> float:
+    if a == 0:
+        return 0.0
+    return abs((b - a) / a) * 100.0
 
 
-def detect_bullish(pivots: pd.DataFrame, min_gap: int, max_gap: int, min_chain_span: int) -> dict:
-    """
-    상승 다이버전스 감지.
-    Returns:
-        found       : bool
-        kind        : 'none' | 'general' | 'chain'
-        points      : 꼭지점 수
-        rsi_extreme : 마지막 꼭지점이 RSI 극값 구간인지
-    """
-    rows = pivots[['low', 'rsi']].reset_index()
-    if len(rows) < 2:
-        return {'found': False, 'kind': 'none', 'points': 0, 'rsi_extreme': False}
+def detect_bullish_divergence_chain(swings: pd.DataFrame) -> dict:
+    if len(swings) < 2:
+        return {"found": False, "general": False, "chain": False, "extreme": False, "strength": 0.0}
 
-    best: dict = {'found': False, 'kind': 'none', 'points': 0, 'rsi_extreme': False}
+    last2 = swings.tail(2).copy()
+    last3 = swings.tail(3).copy()
 
-    for end in range(len(rows) - 1, 0, -1):
-        i2 = int(rows.loc[end, 'index'])
-        p2 = float(rows.loc[end, 'low'])
-        r2 = float(rows.loc[end, 'rsi'])
+    p2 = last2["low"].tolist()
+    r2 = last2["rsi"].tolist()
+    price_move_2 = _pct_change(p2[0], p2[-1])
+    rsi_move_2 = r2[-1] - r2[0]
+    general = p2[-1] < p2[-2] and r2[-1] > r2[-2] and price_move_2 >= MIN_PRICE_MOVE_PCT and rsi_move_2 >= MIN_RSI_MOVE and _bar_gap_ok(last2)
 
-        # RSI 극값 체크 (PDF: 점선 영역 넘는 자리만 유효)
-        rsi_ext = _is_rsi_extreme_low(r2)
+    chain = False
+    chain_strength = 0.0
+    if len(last3) >= 3:
+        p3 = last3["low"].tolist()
+        r3 = last3["rsi"].tolist()
+        price_move_3 = _pct_change(p3[0], p3[-1])
+        rsi_move_3 = r3[-1] - r3[0]
+        chain = (
+            p3[-1] <= p3[-2] <= p3[-3]
+            and r3[-1] >= r3[-2] >= r3[-3]
+            and price_move_3 >= MIN_PRICE_MOVE_PCT
+            and rsi_move_3 >= MIN_RSI_MOVE
+            and _bar_gap_ok(last3)
+        )
+        if chain:
+            chain_strength += min(price_move_3 * 1.2, 8.0)
+            chain_strength += min(rsi_move_3 * 0.8, 10.0)
 
-        for start in range(end - 1, -1, -1):
-            i1 = int(rows.loc[start, 'index'])
-            gap = i2 - i1
-            if gap < min_gap:
-                continue
-            if gap > max_gap:
-                break
+    extreme_rsi = float(last3["rsi"].min()) if len(last3) >= 3 else float(last2["rsi"].min())
+    extreme = extreme_rsi <= EXTREME_OVERSOLD
+    strong_extreme = extreme_rsi <= STRONG_OVERSOLD
 
-            p1 = float(rows.loc[start, 'low'])
-            r1 = float(rows.loc[start, 'rsi'])
+    strength = 0.0
+    if general:
+        strength += 12.0 + min(price_move_2, 6.0) + min(rsi_move_2, 8.0)
+    if chain:
+        strength += 18.0 + chain_strength
+    if extreme:
+        strength += 5.0
+    if strong_extreme:
+        strength += 4.0
 
-            # 조건: 지수 저점 낮아짐 + RSI 저점 높아짐
-            if not (p2 < p1 and r2 > r1):
-                continue
-
-            best = {
-                'found': True,
-                'kind': 'general',
-                'points': 2,
-                'rsi_extreme': rsi_ext,
-                'indices': [i1, i2],
-            }
-
-            # chain(3개 연계) 탐색
-            for prev in range(start - 1, -1, -1):
-                i0 = int(rows.loc[prev, 'index'])
-                p0 = float(rows.loc[prev, 'low'])
-                r0 = float(rows.loc[prev, 'rsi'])
-
-                if i2 - i0 < min_chain_span:
-                    continue
-                # p0 >= p1 >= p2 (저점 낮아짐), r0 <= r1 <= r2 (RSI 높아짐)
-                if p1 <= p0 and r1 >= r0 and r2 >= r1:
-                    return {
-                        'found': True,
-                        'kind': 'chain',
-                        'points': 3,
-                        'rsi_extreme': rsi_ext,
-                        'indices': [i0, i1, i2],
-                    }
-            return best
-
-    return best
+    price_points = last3["low"].tolist() if len(last3) >= 3 else last2["low"].tolist()
+    rsi_points = last3["rsi"].tolist() if len(last3) >= 3 else last2["rsi"].tolist()
+    return {
+        "found": general or chain,
+        "general": general,
+        "chain": chain,
+        "extreme": extreme,
+        "strong_extreme": strong_extreme,
+        "strength": round(strength, 2),
+        "price_points": price_points,
+        "rsi_points": rsi_points,
+        "bar_indices": list(last3.index) if len(last3) >= 3 else list(last2.index),
+    }
 
 
-def detect_bearish(pivots: pd.DataFrame, min_gap: int, max_gap: int, min_chain_span: int) -> dict:
-    """
-    하락 다이버전스 감지.
-    Returns:
-        found       : bool
-        kind        : 'none' | 'general' | 'chain'
-        points      : 꼭지점 수
-        rsi_extreme : 마지막 꼭지점이 RSI 극값 구간인지
-    """
-    rows = pivots[['high', 'rsi']].reset_index()
-    if len(rows) < 2:
-        return {'found': False, 'kind': 'none', 'points': 0, 'rsi_extreme': False}
 
-    best: dict = {'found': False, 'kind': 'none', 'points': 0, 'rsi_extreme': False}
+def detect_bearish_divergence_chain(swings: pd.DataFrame) -> dict:
+    if len(swings) < 2:
+        return {"found": False, "general": False, "chain": False, "extreme": False, "strength": 0.0}
 
-    for end in range(len(rows) - 1, 0, -1):
-        i2 = int(rows.loc[end, 'index'])
-        p2 = float(rows.loc[end, 'high'])
-        r2 = float(rows.loc[end, 'rsi'])
+    last2 = swings.tail(2).copy()
+    last3 = swings.tail(3).copy()
 
-        rsi_ext = _is_rsi_extreme_high(r2)
+    p2 = last2["high"].tolist()
+    r2 = last2["rsi"].tolist()
+    price_move_2 = _pct_change(p2[0], p2[-1])
+    rsi_move_2 = r2[0] - r2[-1]
+    general = p2[-1] > p2[-2] and r2[-1] < r2[-2] and price_move_2 >= MIN_PRICE_MOVE_PCT and rsi_move_2 >= MIN_RSI_MOVE and _bar_gap_ok(last2)
 
-        for start in range(end - 1, -1, -1):
-            i1 = int(rows.loc[start, 'index'])
-            gap = i2 - i1
-            if gap < min_gap:
-                continue
-            if gap > max_gap:
-                break
+    chain = False
+    chain_strength = 0.0
+    if len(last3) >= 3:
+        p3 = last3["high"].tolist()
+        r3 = last3["rsi"].tolist()
+        price_move_3 = _pct_change(p3[0], p3[-1])
+        rsi_move_3 = r3[0] - r3[-1]
+        chain = (
+            p3[-1] >= p3[-2] >= p3[-3]
+            and r3[-1] <= r3[-2] <= r3[-3]
+            and price_move_3 >= MIN_PRICE_MOVE_PCT
+            and rsi_move_3 >= MIN_RSI_MOVE
+            and _bar_gap_ok(last3)
+        )
+        if chain:
+            chain_strength += min(price_move_3 * 1.2, 8.0)
+            chain_strength += min(rsi_move_3 * 0.8, 10.0)
 
-            p1 = float(rows.loc[start, 'high'])
-            r1 = float(rows.loc[start, 'rsi'])
+    extreme_rsi = float(last3["rsi"].max()) if len(last3) >= 3 else float(last2["rsi"].max())
+    extreme = extreme_rsi >= EXTREME_OVERBOUGHT
+    strong_extreme = extreme_rsi >= STRONG_OVERBOUGHT
 
-            # 조건: 지수 고점 높아짐 + RSI 고점 낮아짐
-            if not (p2 > p1 and r2 < r1):
-                continue
+    strength = 0.0
+    if general:
+        strength += 12.0 + min(price_move_2, 6.0) + min(rsi_move_2, 8.0)
+    if chain:
+        strength += 18.0 + chain_strength
+    if extreme:
+        strength += 5.0
+    if strong_extreme:
+        strength += 4.0
 
-            best = {
-                'found': True,
-                'kind': 'general',
-                'points': 2,
-                'rsi_extreme': rsi_ext,
-                'indices': [i1, i2],
-            }
-
-            for prev in range(start - 1, -1, -1):
-                i0 = int(rows.loc[prev, 'index'])
-                p0 = float(rows.loc[prev, 'high'])
-                r0 = float(rows.loc[prev, 'rsi'])
-
-                if i2 - i0 < min_chain_span:
-                    continue
-                if p1 >= p0 and r1 <= r0 and r2 <= r1:
-                    return {
-                        'found': True,
-                        'kind': 'chain',
-                        'points': 3,
-                        'rsi_extreme': rsi_ext,
-                        'indices': [i0, i1, i2],
-                    }
-            return best
-
-    return best
+    price_points = last3["high"].tolist() if len(last3) >= 3 else last2["high"].tolist()
+    rsi_points = last3["rsi"].tolist() if len(last3) >= 3 else last2["rsi"].tolist()
+    return {
+        "found": general or chain,
+        "general": general,
+        "chain": chain,
+        "extreme": extreme,
+        "strong_extreme": strong_extreme,
+        "strength": round(strength, 2),
+        "price_points": price_points,
+        "rsi_points": rsi_points,
+        "bar_indices": list(last3.index) if len(last3) >= 3 else list(last2.index),
+    }

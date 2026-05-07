@@ -1,21 +1,38 @@
-from __future__ import annotations
+from pydantic import BaseModel
 
-import os
 
-APP_VERSION = "2.0.0-final"
-DEFAULT_MARKET = os.getenv("DEFAULT_MARKET", "ALL").upper()
-SCAN_LIMIT = int(os.getenv("SCAN_LIMIT", "120"))
-MAX_RESULTS = int(os.getenv("MAX_RESULTS", "30"))
+class Settings(BaseModel):
+    default_symbols: list[str] = [
+        "KRW-BTC",
+        "KRW-ETH",
+        "KRW-XRP",
+        "KRW-SOL",
+        "KRW-DOGE",
+        "KRW-ADA",
+        "KRW-SUI",
+        "KRW-LINK",
+        "KRW-AVAX",
+        "KRW-TRX",
+        "KRW-HBAR",
+        "KRW-XLM",
+    ]
+    default_limit: int = 240
+    prefilter_limit: int = 160
+    rsi_period: int = 14
+    swing_window: int = 2
+    max_symbols_per_scan: int = 50
+    universe_size: int = 100
+    prefilter_size: int = 50
+    scan_concurrency: int = 2
+    request_timeout: float = 20.0
+    top_pick_count: int = 3
 
-# 농사매매 기본 필터
-MA_LONG = int(os.getenv("MA_LONG", "224"))
-MA_MID = int(os.getenv("MA_MID", "112"))
-MIN_TRADING_VALUE = int(os.getenv("MIN_TRADING_VALUE", "1500000000"))  # 20일 평균 거래대금 15억
-MIN_PRICE = int(os.getenv("MIN_PRICE", "500"))
-MAX_PRICE = int(os.getenv("MAX_PRICE", "300000"))
+    full_analysis_main_limit: int = 12
+    full_analysis_sub_limit: int = 16
+    quick_score_main_floor: float = 22.0
+    quick_score_sub_floor: float = 16.0
+    main_threshold: float = 50.0
+    sub_threshold: float = 28.0
 
-# Render Free 안정화용
-OHLCV_DAYS = int(os.getenv("OHLCV_DAYS", "620"))
-PYKRX_SLEEP_SEC = float(os.getenv("PYKRX_SLEEP_SEC", "0.03"))
-CACHE_TTL_SEC = int(os.getenv("CACHE_TTL_SEC", "900"))
-PYTHONHASHSEED = os.getenv("PYTHONHASHSEED", "0")
+
+settings = Settings()
