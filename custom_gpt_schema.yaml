@@ -1,0 +1,85 @@
+openapi: 3.1.0
+info:
+  title: Nongsa Scanner API
+  version: 2.0.0-final
+  description: 224일선, 쌍바닥, 공구리 기반 국내주식 농사매매 후보 스캐너
+servers:
+  - url: https://YOUR-RENDER-SERVICE.onrender.com
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: 서버 상태 확인
+      responses:
+        '200':
+          description: OK
+  /scan/main:
+    get:
+      operationId: scanMain
+      summary: A타입 메인 후보만 스캔
+      parameters:
+        - in: query
+          name: market
+          schema:
+            type: string
+            enum: [ALL, KOSPI, KOSDAQ]
+            default: ALL
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 120
+            minimum: 1
+            maximum: 300
+      responses:
+        '200':
+          description: A타입 후보 목록
+  /scan/all:
+    get:
+      operationId: scanAll
+      summary: A/B 타입 전체 후보 스캔
+      parameters:
+        - in: query
+          name: market
+          schema:
+            type: string
+            enum: [ALL, KOSPI, KOSDAQ]
+            default: ALL
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 120
+            minimum: 1
+            maximum: 300
+      responses:
+        '200':
+          description: A/B 타입 후보 목록
+  /analyze/{ticker}:
+    get:
+      operationId: analyzeTicker
+      summary: 단일 종목 농사매매 조건 분석
+      parameters:
+        - in: path
+          name: ticker
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          description: 단일 종목 분석 결과
+  /debug/{ticker}:
+    get:
+      operationId: debugTicker
+      summary: 조건 미충족 사유까지 포함한 단일 종목 상세 분석
+      parameters:
+        - in: path
+          name: ticker
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          description: 상세 디버그 결과

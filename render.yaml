@@ -1,29 +1,20 @@
 services:
   - type: web
-    name: jade-wave-scanner-v4
-    runtime: python
-    plan: starter
-    pythonVersion: "3.11.11"
+    name: nongsa-scanner
+    env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: UPBIT_BASE_URL
-        value: https://api.upbit.com
-      - key: SCAN_MARKET_LIMIT
-        value: "80"
-      - key: TOP_PICK_COUNT
-        value: "8"
-      - key: MIN_DAILY_ACC_TRADE_PRICE_KRW
-        value: "3000000000"
-      - key: MAX_STOP_PCT
-        value: "8.0"
-      - key: MIN_RR_TP1
-        value: "1.2"
-      - key: MIN_RR_TP2
-        value: "2.0"
-      - key: OVERHEATED_PCT_FROM_20_LOW
-        value: "35.0"
-      - key: FIB_ZONE_TOLERANCE_PCT
-        value: "1.8"
-      - key: EXCLUDE_MARKETS
-        value: ""
+      - key: DEFAULT_MARKET
+        value: ALL
+      - key: SCAN_LIMIT
+        value: 120
+      - key: MAX_RESULTS
+        value: 30
+      - key: MIN_TRADING_VALUE
+        value: 1500000000
+      - key: CACHE_TTL_SEC
+        value: 900
+      - key: PYKRX_SLEEP_SEC
+        value: 0.03

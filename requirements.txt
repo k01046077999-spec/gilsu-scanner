@@ -1,7 +1,6 @@
-fastapi==0.115.14
-uvicorn[standard]==0.34.3
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pykrx==1.0.51
 pandas==2.2.3
-numpy==1.26.4
-httpx==0.28.1
-pydantic==2.11.7
-pydantic-settings==2.10.1
+numpy==2.2.1
+python-dateutil==2.9.0.post0

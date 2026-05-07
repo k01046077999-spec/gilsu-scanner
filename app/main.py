@@ -1,59 +1,76 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
-from app.core.schemas import HealthResponse, ReadyResponse, ScanResponse
-from app.services.engine import ScannerEngine
+from app.config import APP_VERSION, DEFAULT_MARKET, SCAN_LIMIT
+from app.scanner import analyze_ticker, scan
 
 app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version,
-    description=(
-        "제이드 파동 이론 기반 업비트 스캐너. "
-        "RSI 다이버전스 연계 + 피보나치 되돌림 + 직전고 돌파 조건을 모두 확인합니다."
-    ),
+    title="Nongsa Scanner API",
+    description="224일선·쌍바닥·공구리 기반 농사매매 후보 스캐너",
+    version=APP_VERSION,
 )
 
-engine = ScannerEngine()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.get('/', response_model=HealthResponse, tags=['System'])
-async def root() -> HealthResponse:
-    return engine.health()
+@app.get("/")
+def root():
+    return {
+        "service": "nongsa-scanner",
+        "version": APP_VERSION,
+        "status": "ok",
+        "endpoints": [
+            "/health",
+            "/scan/main?market=ALL&limit=120",
+            "/scan/all?market=ALL&limit=120",
+            "/analyze/{ticker}",
+            "/debug/{ticker}",
+        ],
+    }
 
 
-@app.get('/health', response_model=HealthResponse, tags=['System'])
-async def health() -> HealthResponse:
-    return engine.health()
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": APP_VERSION}
 
 
-@app.get('/ready', response_model=ReadyResponse, tags=['System'])
-async def ready() -> ReadyResponse:
-    return engine.ready()
+@app.get("/scan/main")
+def scan_main(
+    market: str = Query(DEFAULT_MARKET, pattern="^(ALL|KOSPI|KOSDAQ)$"),
+    limit: int = Query(SCAN_LIMIT, ge=1, le=300),
+):
+    return scan(market=market, limit=limit, main_only=True)
 
 
-@app.get('/scan', response_model=ScanResponse, tags=['Scanner'],
-         summary='전체 스캔',
-         description=(
-             "거래대금 상위 KRW 마켓을 전부 분석합니다. "
-             "통과 신호는 top_picks에, 전체 결과는 signals에 담깁니다."
-         ))
-async def scan() -> ScanResponse:
-    return await engine.scan()
+@app.get("/scan/all")
+def scan_all(
+    market: str = Query(DEFAULT_MARKET, pattern="^(ALL|KOSPI|KOSDAQ)$"),
+    limit: int = Query(SCAN_LIMIT, ge=1, le=300),
+):
+    return scan(market=market, limit=limit, main_only=False)
 
 
-@app.get('/scan/symbol/{symbol}', tags=['Scanner'],
-         summary='단일 종목 분석',
-         description=(
-             "특정 종목 1개를 즉시 분석합니다. "
-             "symbol 예: BTC, ETH, KRW-SOL"
-         ))
-async def scan_symbol(symbol: str):
-    normalized = symbol.upper().replace('/', '').replace('_', '-')
-    if not normalized.startswith('KRW-'):
-        normalized = f'KRW-{normalized.replace("KRW", "").replace("-", "")}'
-    result = await engine.analyze_symbol(normalized)
+@app.get("/analyze/{ticker}")
+def analyze(ticker: str):
+    if not ticker.isdigit() or len(ticker) != 6:
+        raise HTTPException(status_code=400, detail="ticker must be a 6-digit KRX code")
+    result = analyze_ticker(ticker, include_reject_reasons=False)
     if result is None:
-        raise HTTPException(status_code=404, detail='signal_not_found')
+        return {"ticker": ticker, "matched": False, "message": "조건 미충족 또는 데이터 부족"}
     return result
+
+
+@app.get("/debug/{ticker}")
+def debug(ticker: str):
+    if not ticker.isdigit() or len(ticker) != 6:
+        raise HTTPException(status_code=400, detail="ticker must be a 6-digit KRX code")
+    result = analyze_ticker(ticker, include_reject_reasons=True)
+    return result or {"ticker": ticker, "matched": False, "message": "분석 불가"}

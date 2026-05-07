@@ -1,144 +1,111 @@
-# 제이드 파동 스캐너 v4
+# Nongsa Scanner API v2.0 Final
 
-**제이드 파동 이론** 기반 업비트 KRW 마켓 자동 스캐너.  
-RSI 다이버전스 연계 + 피보나치 되돌림 + 직전고 돌파를 모두 확인합니다.
+국내주식 `농사매매법` 후보를 찾기 위한 FastAPI 기반 스캐너입니다.  
+GitHub 업로드 후 Render에 바로 배포할 수 있게 구성했습니다.
 
----
+## 핵심 구현
 
-## 매매 로직 요약 (PDF 원칙)
+이 프로젝트는 특정 유튜버의 강의 내용을 그대로 복제하는 목적이 아니라, 공개적으로 알려진 농사매매식 차트 구조를 **기계 판정 가능한 기술적 조건**으로 일반화한 스캐너입니다.
 
-| 단계 | 내용 |
-|------|------|
-| 1 | 1시간봉 기준 앞전 파동 방향 확인 (상승/하락/잔파동) |
-| 2 | **15m·1h 상승 다이버전스 연계(3꼭지)** 탐지 |
-| 3 | RSI 극값 구간(≤42 / ≥58) 확인 — 중간값 다이버전스 제외 |
-| 4 | **피보나치 0.618~0.786** 되돌림 구간 진입 여부 확인 |
-| 5 | **직전 고점 돌파** 여부 확인 (파동의 목적 달성) |
-| 6 | BTC EMA200 기반 시장 레짐(위험 선호/회피) 필터 |
-| 7 | 손절 = **피보나치 1 (swing 저점)** |
-| 8 | 1차 익절 = **피보나치 0 (직전 고점)** |
-| 9 | 2차 익절 = **1.272 또는 1.618 확장** (강도에 따라 동적 선택) |
+### A타입: 메인 후보
 
----
+- 224일선 아래 또는 224일선 근처
+- 최근 100~180거래일 기준 장기간 224일선 아래 체류
+- 쌍바닥 조건 통과
+- 공구리 조건 통과
+- 20일 평균 거래대금 기준 통과
 
-## API 엔드포인트
+### B타입: 탐색 후보
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| GET | `/health` | 서버 상태 확인 |
-| GET | `/ready` | 설정값 확인 |
-| GET | `/scan` | 전체 마켓 스캔 |
-| GET | `/scan/symbol/{symbol}` | 단일 종목 분석 (예: `BTC`, `ETH`, `KRW-SOL`) |
+- 224일선 아래 또는 224일선 근처
+- 장기간 224일선 아래 체류
+- 쌍바닥 또는 공구리 중 하나만 통과
+- 20일 평균 거래대금 기준 통과
 
-### `/scan` 응답 구조
+## 쌍바닥 판정 로직
 
-```json
-{
-  "scanned_symbols": 80,
-  "matched_symbols": 3,
-  "elapsed_seconds": 12.4,
-  "top_picks": [...],
-  "signals": [...],
-  "warnings": []
-}
-```
+`detect_w_bottom()`은 아래를 계산합니다.
 
-### `ScanSignal` 주요 필드
+1. 최근 100거래일 내 로컬 저점 탐색
+2. 두 저점 간격 10~65거래일
+3. 두 저점 가격 차이 -12%~+15% 이내
+4. 두 저점 사이 목선 반등폭 8% 이상
+5. 2저점 이후 현재가 3% 이상 반등
+6. 목선 대비 과도한 추격 구간 제외
+7. 점수 55점 이상이면 쌍바닥 통과
 
-| 필드 | 설명 |
-|------|------|
-| `symbol` | 마켓 코드 (KRW-BTC 등) |
-| `state` | `candidate` / `wait` / `reject` |
-| `grade` | `S` / `A` / `B` / `C` / `D` |
-| `score` | 0~100+ 점수 |
-| `primary_divergence` | 주요 다이버전스 정보 (timeframe, kind, points) |
-| `divergence_1h` | 1시간봉 다이버전스 |
-| `divergence_4h` | 4시간봉 다이버전스 (방향 보조) |
-| `entry_zone_status` | `in_zone` / `near_zone` / `out_zone` |
-| `breakout_confirmed` | 직전 고점 돌파 여부 |
-| `market_regime` | `risk_on` / `neutral_ok` / `risk_off` |
-| `risk.stop_price` | 손절가 (피보나치 1) |
-| `risk.tp1_price` | 1차 익절가 (직전 고점) |
-| `risk.tp2_price` | 2차 익절가 (확장 레벨) |
-| `risk.rr_tp2` | 최종 수익비 |
-| `direct.status` | `buyable` / `wait` / `reject` |
-| `direct.message` | GPT 연동용 한국어 행동 안내 |
+응답에는 `low1_date`, `low2_date`, `neckline`, `rebound_from_low2_pct`, `score`가 포함됩니다.
 
----
+## 공구리 판정 로직
 
-## 점수 체계
+`detect_gonguri()`는 아래를 계산합니다.
 
-| 항목 | 최대 점수 |
-|------|-----------|
-| 15m chain 다이버전스 | 22 |
-| 1h chain 다이버전스 | 20 |
-| RSI 극값 확인 | 8 |
-| 피보나치 in_zone | 18 |
-| 직전 고점 돌파 | 12 |
-| 4h 방향 보조 | 12 |
-| 시장 레짐 risk_on | 8 |
-| 거래량 비율 | 8 |
-| 손절 타이트 | 6 |
-| 수익비 우수 | 8 |
+1. 최근 45거래일 내 돌파봉 탐색
+2. 돌파 전 45~90거래일 구간의 피벗 고점/박스권 상단 산출
+3. 돌파봉 종가가 기준선 1.5% 이상 상회 또는 고가가 3% 이상 상회
+4. 돌파봉 거래량이 직전 20일 평균 대비 1.05배 이상
+5. 돌파 이후 종가가 기준선 -5% 이내에서 버팀
+6. 현재가가 기준선 대비 +25% 이상이면 과열 제외
+7. 점수 58점 이상이면 공구리 통과
 
-| 등급 | 점수 |
-|------|------|
-| S | 90+ |
-| A | 75+ |
-| B | 60+ |
-| C | 45+ |
-| D | ~44 |
-
----
-
-## 필터 통과 조건 (모두 만족해야 `candidate`)
-
-1. BTC 시장 레짐 `risk_on` 또는 `neutral_ok`
-2. 피보나치 zone `in_zone` 또는 `near_zone`
-3. 늦은 진입 아님 (fib_0618 기준 +2.5% 이내)
-4. 거래량 비율 ≥ 0.95
-5. 과열 아님 (20봉 저가 대비 +35% 미만)
-6. 직전 고점 돌파 확인
-7. 저항까지 여유 ≥ 3%
-8. 유효한 손절 구조 (stop < entry)
-9. 손절 너비 ≤ 8% (절대 한도 12%)
-10. TP1 수익비 ≥ 1.2
-11. TP2 수익비 ≥ 2.0
-12. RSI 극값 구간에서 발생한 다이버전스
-
----
-
-## 환경변수 (Render 배포 시)
-
-| 변수명 | 기본값 | 설명 |
-|--------|--------|------|
-| `UPBIT_BASE_URL` | `https://api.upbit.com` | 업비트 API |
-| `SCAN_MARKET_LIMIT` | `80` | 스캔할 최대 종목 수 |
-| `TOP_PICK_COUNT` | `8` | 상위 픽 개수 |
-| `MIN_DAILY_ACC_TRADE_PRICE_KRW` | `3000000000` | 일 거래대금 필터 (3십억) |
-| `MAX_STOP_PCT` | `8.0` | 최대 손절 % |
-| `MIN_RR_TP2` | `2.0` | 최소 최종 수익비 |
-| `OVERHEATED_PCT_FROM_20_LOW` | `35.0` | 과열 판단 기준 % |
-| `EXCLUDE_MARKETS` | `` | 제외 마켓 (쉼표 구분, 예: `KRW-SHIB,KRW-DOGE`) |
-
----
+응답에는 `resistance`, `breakout_date`, `breakout_volume_ratio_20d`, `after_min_close_vs_resistance_pct`, `current_vs_resistance_pct`, `score`가 포함됩니다.
 
 ## 로컬 실행
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload
 ```
 
-Swagger UI: http://localhost:8000/docs
+브라우저에서 확인:
 
----
+```text
+http://127.0.0.1:8000/health
+http://127.0.0.1:8000/scan/main?market=ALL&limit=120
+http://127.0.0.1:8000/scan/all?market=ALL&limit=120
+http://127.0.0.1:8000/analyze/005930
+http://127.0.0.1:8000/debug/005930
+```
 
-## 버전 히스토리
+## Render 배포
 
-| 버전 | 주요 변경 |
-|------|-----------|
-| v4.0.0 | RSI 극값 필터 추가, DivergenceDetail 스키마 분리, 15m/1h/4h 개별 노출, 확장 레벨 동적 선택 |
-| v3.0.0 | BTC 레짐 필터, breakout_confirmed, 동적 익절 레벨 |
-| v2.2.1 | main/sub 이중 모드, 업비트 전용 |
-| v0.8.2 | 초기 손실 축소 버전 |
+Build Command:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start Command:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+환경변수 권장값:
+
+```text
+DEFAULT_MARKET=ALL
+SCAN_LIMIT=120
+MAX_RESULTS=30
+MIN_TRADING_VALUE=1500000000
+CACHE_TTL_SEC=900
+PYKRX_SLEEP_SEC=0.03
+```
+
+Render Free에서는 `limit=80~120` 권장. 300개 이상은 pykrx 조회 지연으로 502/timeout 가능성이 있습니다.
+
+## Custom GPT 연결
+
+`custom_gpt_schema.yaml`에서 아래 부분만 본인 Render 주소로 바꾸세요.
+
+```yaml
+servers:
+  - url: https://YOUR-RENDER-SERVICE.onrender.com
+```
+
+## 한계
+
+- 이 스캐너는 투자 추천이 아니라 조건 검색기입니다.
+- 쌍바닥/공구리는 사람의 차트 해석 영역이 포함되므로, 최종 매수 전 차트 육안 검토가 필요합니다.
+- 관리종목, 감사의견, 자본잠식, 거래정지 등 재무/공시 위험은 별도 데이터 연동 전까지 완전 자동 제외되지 않습니다.
+- 현재 버전은 pykrx 기반이라 장중 실시간 데이터가 아니라 KRX 일봉 데이터 기준입니다.
